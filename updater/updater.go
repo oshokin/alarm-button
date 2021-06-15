@@ -134,8 +134,8 @@ func (updater *Updater) Run() {
 		updater.ErrorLog.Println("Ошибка при сверке контрольной суммы:", err.Error())
 		updater.Stop(1)
 	}
-	updater.InfoLog.Println("Загружаю файлы обновления во временную папку")
 	if updater.IsUpdateNeeded {
+		updater.InfoLog.Println("Загружаю файлы обновления во временную папку")
 		err = updater.downloadFiles()
 		if err != nil {
 			updater.ErrorLog.Println("Ошибка при загрузке файлов с сервера:", err.Error())
