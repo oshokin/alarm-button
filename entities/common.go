@@ -1,8 +1,10 @@
 package entities
 
 import (
+	"crypto"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -17,12 +19,35 @@ import (
 )
 
 const (
-	clientBufferSize uint          = 1024
-	clientSleepTime  time.Duration = 5 * time.Second
+	CurrentVersion          string        = "1.1.0"
+	VersionFileName         string        = "button-version.yaml"
+	UpdateMarkerFileName    string        = "button-update-marker.bin"
+	DefaultFileMode         os.FileMode   = 0755
+	DefaultChecksumFunction crypto.Hash   = crypto.SHA512
+	clientBufferSize        uint          = 1024
+	clientSleepTime         time.Duration = 5 * time.Second
 )
 
 type Serializable interface {
 	Serialize() ([]byte, error)
+}
+
+type VersionDescription struct {
+	VersionNumber string `yaml:"version"`
+}
+
+type UpdateDescription struct {
+	VersionNumber string              `yaml:"version"`
+	Files         map[string]string   `yaml:"files"`
+	Roles         map[string][]string `yaml:"roles"`
+}
+
+func NewUpdateDescription() *UpdateDescription {
+	return &UpdateDescription{
+		VersionNumber: CurrentVersion,
+		Files:         make(map[string]string, 16),
+		Roles:         make(map[string][]string, 16),
+	}
 }
 
 type Message struct {
@@ -191,30 +216,26 @@ func NewClient() (*Client, error) {
 }
 
 func parseClientArgs() (string, bool, error) {
-	hasSocketCorrectFormat := false
 	serverSocket := ""
-	debugMode := false
-
-	if len(os.Args) > 2 {
-		serverSocket = os.Args[1]
-		hasSocketCorrectFormat = strings.Contains(serverSocket, ":")
-		debugMode = (os.Args[2] == "-d")
-	} else if len(os.Args) > 1 {
-		serverSocket = os.Args[1]
-		hasSocketCorrectFormat = strings.Contains(serverSocket, ":")
+	parsingError := errors.New("укажите адрес сервера (хост:порт)")
+	debugModePointer := flag.Bool("debug", false, "режим отладки (ПК не выключается)")
+	flag.Parse()
+	if len(flag.Args()) > 0 {
+		serverSocket = flag.Arg(0)
+		_, err := net.ResolveTCPAddr("tcp", serverSocket)
+		if err != nil {
+			parsingError = fmt.Errorf("некорректный адрес сервера, %s", err.Error())
+		} else {
+			parsingError = nil
+		}
 	}
-
-	if hasSocketCorrectFormat {
-		return serverSocket, debugMode, nil
-	} else {
-		return serverSocket, debugMode, errors.New("укажите адрес сервера (хост:порт)")
-	}
+	return serverSocket, *debugModePointer, parsingError
 }
 
 func (client *Client) RunChecker() {
 	request, err := NewStateRequest(client).Serialize()
 	if err != nil {
-		client.ErrorLog.Println("Ошибка при преобразовании данных: ", err.Error())
+		client.ErrorLog.Println("Ошибка при преобразовании данных:", err.Error())
 		client.Stop(false, 1)
 	}
 	for {
@@ -227,7 +248,7 @@ func (client *Client) RunAlarmer(IsAlarmButtonPressed bool) {
 	client.IsAlarmButtonPressed = IsAlarmButtonPressed
 	request, err := NewAlarmRequest(client).Serialize()
 	if err != nil {
-		client.ErrorLog.Println("Ошибка при преобразовании данных: ", err.Error())
+		client.ErrorLog.Println("Ошибка при преобразовании данных:", err.Error())
 		client.Stop(false, 1)
 	}
 	for {
@@ -244,7 +265,7 @@ func (client *Client) Stop(IsPowerOffRequired bool, params ...int) {
 
 	if IsPowerOffRequired {
 		if err := client.shutdownPC(); err != nil {
-			client.ErrorLog.Println("Ошибка при выключении компьютера: ", err.Error())
+			client.ErrorLog.Println("Ошибка при выключении компьютера:", err.Error())
 			exitCode = 1
 		}
 	}
@@ -276,7 +297,7 @@ func (client *Client) shutdownPC() error {
 func (client *Client) sendToServer(request []byte) {
 	connection, err := net.Dial("tcp", client.ServerSocket)
 	if err != nil {
-		client.ErrorLog.Println("Не удалось подключиться к серверу: ", err.Error())
+		client.ErrorLog.Println("Не удалось подключиться к серверу:", err.Error())
 	} else {
 		connection.Write(request)
 		client.decodeServerResponse(connection)
@@ -289,23 +310,23 @@ func (client *Client) decodeServerResponse(connection net.Conn) {
 	byteBuf := make([]byte, clientBufferSize)
 	bytesRead, err := connection.Read(byteBuf)
 	if err != nil {
-		client.ErrorLog.Println("Не удалось прочитать ответ сервера: ", err.Error())
+		client.ErrorLog.Println("Не удалось прочитать ответ сервера:", err.Error())
 	} else {
 		message := &Message{}
 		if err := json.Unmarshal(byteBuf[:bytesRead], &message); err != nil {
-			client.ErrorLog.Println("Ошибка при парсинге сообщения: ", err.Error())
+			client.ErrorLog.Println("Ошибка при парсинге сообщения:", err.Error())
 		}
 		switch message.Type {
 		case "AlarmResponse":
 			alarmResponse := AlarmResponse{}
 			if err := json.Unmarshal(*message.Data, &alarmResponse); err != nil {
-				client.ErrorLog.Println("Ошибка при парсинге сообщения: ", err.Error())
+				client.ErrorLog.Println("Ошибка при парсинге сообщения:", err.Error())
 			}
 			client.processServerResponse(alarmResponse)
 		case "StateResponse":
 			stateResponse := StateResponse{}
 			if err := json.Unmarshal(*message.Data, &stateResponse); err != nil {
-				client.ErrorLog.Println("Ошибка при парсинге сообщения: ", err.Error())
+				client.ErrorLog.Println("Ошибка при парсинге сообщения:", err.Error())
 			}
 			client.processServerResponse(stateResponse)
 		default:
@@ -318,15 +339,15 @@ func (client *Client) processServerResponse(response interface{}) {
 	switch response.(type) {
 	case AlarmResponse:
 		alarmResponse := response.(AlarmResponse)
-		client.InfoLog.Println("Получен ответ на разовую тревогу: ", alarmResponse.String())
+		client.InfoLog.Println("Получен ответ на разовую тревогу:", alarmResponse.String())
 		client.Stop(false)
 	case StateResponse:
 		stateResponse := response.(StateResponse)
-		client.InfoLog.Println("Получен ответ на проверку состояния: ", stateResponse.String())
+		client.InfoLog.Println("Получен ответ на проверку состояния:", stateResponse.String())
 		client.IsAlarmButtonPressed = stateResponse.IsAlarmButtonPressed
 		client.processAlarmButtonState()
 	default:
-		client.InfoLog.Println("Получена другая информация: ", response)
+		client.InfoLog.Println("Получена другая информация:", response)
 	}
 }
 
@@ -341,4 +362,19 @@ func SerializeWithTypeName(typeName string, entity interface{}) ([]byte, error) 
 		return nil, err
 	}
 	return encodedMessage, nil
+}
+
+func GetFileChecksum(fileName string) ([]byte, error) {
+	contents, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil, err
+	}
+	if !DefaultChecksumFunction.Available() {
+		return nil, errors.New("хеш-функция не доступна, подсчет контрольной суммы невозможен")
+	}
+	hasher := DefaultChecksumFunction.New()
+	hasher.Write(contents)
+	newFileChecksum := hasher.Sum(contents)
+
+	return newFileChecksum[:], nil
 }

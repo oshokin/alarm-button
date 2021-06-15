@@ -1,1 +1,14 @@
 /.vscode
+button-off/button-off.exe
+button-on/button-on.exe
+checker/checker.exe
+packager/button-off.exe
+packager/button-on.exe
+packager/checker.exe
+packager/packager.exe
+packager/server.exe
+packager/updater.exe
+packager/button-version.yaml
+server/server.exe
+updater/updater.exe
+updater/button-version.yaml

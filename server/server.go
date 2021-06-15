@@ -88,7 +88,7 @@ func parseServerArgs() (string, error) {
 func main() {
 	server, err := NewServer()
 	if err != nil {
-		server.ErrorLog.Println("Ошибка при запуске сервера: ", err.Error())
+		server.ErrorLog.Println("Ошибка при запуске сервера:", err.Error())
 		server.Stop(1)
 	}
 	server.Run()
@@ -97,14 +97,14 @@ func main() {
 func (server *Server) Run() {
 	listener, err := net.Listen("tcp", server.Socket)
 	if err != nil {
-		server.ErrorLog.Fatal("Ошибка при запуске сервера: ", err.Error())
+		server.ErrorLog.Fatal("Ошибка при запуске сервера:", err.Error())
 	}
 	defer listener.Close()
-	server.InfoLog.Println("Сервер запущен на ", server.Socket)
+	server.InfoLog.Println("Сервер запущен на", server.Socket)
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
-			server.ErrorLog.Println("Ошибка при ожидании соединения: ", err.Error())
+			server.ErrorLog.Println("Ошибка при ожидании соединения:", err.Error())
 			continue
 		}
 		go server.decodeClientRequest(connection)
@@ -131,23 +131,23 @@ func (server *Server) decodeClientRequest(connection net.Conn) {
 	byteBuf := make([]byte, serverBufferSize)
 	bytesRead, err := connection.Read(byteBuf)
 	if err != nil {
-		server.ErrorLog.Println("Ошибка при чтении сообщения: ", err.Error())
+		server.ErrorLog.Println("Ошибка при чтении сообщения:", err.Error())
 	}
 	message := &entities.Message{}
 	if err := json.Unmarshal(byteBuf[:bytesRead], &message); err != nil {
-		server.ErrorLog.Println("Ошибка при обработке сообщения: ", err.Error())
+		server.ErrorLog.Println("Ошибка при обработке сообщения:", err.Error())
 	}
 	switch message.Type {
 	case "AlarmRequest":
 		alarmRequest := entities.AlarmRequest{}
 		if err := json.Unmarshal(*message.Data, &alarmRequest); err != nil {
-			server.ErrorLog.Println("Ошибка при обработке сообщения: ", err.Error())
+			server.ErrorLog.Println("Ошибка при обработке сообщения:", err.Error())
 		}
 		server.processClientRequest(connection, alarmRequest)
 	case "StateRequest":
 		stateRequest := entities.StateRequest{}
 		if err := json.Unmarshal(*message.Data, &stateRequest); err != nil {
-			server.ErrorLog.Println("Ошибка при обработке сообщения: ", err.Error())
+			server.ErrorLog.Println("Ошибка при обработке сообщения:", err.Error())
 		}
 		server.processClientRequest(connection, stateRequest)
 	default:
@@ -160,26 +160,26 @@ func (server *Server) processClientRequest(connection net.Conn, request interfac
 	switch request.(type) {
 	case entities.AlarmRequest:
 		alarmRequest := request.(entities.AlarmRequest)
-		server.InfoLog.Println("Получено оповещение о тревоге: ", alarmRequest.String())
+		server.InfoLog.Println("Получено оповещение о тревоге:", alarmRequest.String())
 		server.CurrentState = alarmRequest.GetStateResponse()
-		server.InfoLog.Println("Текущее состояние: ", server.CurrentState.String())
+		server.InfoLog.Println("Текущее состояние:", server.CurrentState.String())
 		response, err := alarmRequest.GetAlarmResponse().Serialize()
 		if err != nil {
-			server.ErrorLog.Println("Ошибка при формировании ответа: ", err.Error())
+			server.ErrorLog.Println("Ошибка при формировании ответа:", err.Error())
 		} else {
 			connection.Write(response)
 		}
 	case entities.StateRequest:
 		stateRequest := request.(entities.StateRequest)
-		server.InfoLog.Println("Получен запрос на проверку состояния: ", stateRequest.String())
+		server.InfoLog.Println("Получен запрос на проверку состояния:", stateRequest.String())
 		response, err := server.CurrentState.Serialize()
 		if err != nil {
-			server.ErrorLog.Println("Ошибка при формировании ответа: ", err.Error())
+			server.ErrorLog.Println("Ошибка при формировании ответа:", err.Error())
 		} else {
 			connection.Write(response)
-			server.InfoLog.Println("Клиенту отправлено состояние: ", server.CurrentState.String())
+			server.InfoLog.Println("Клиенту отправлено состояние:", server.CurrentState.String())
 		}
 	default:
-		server.InfoLog.Println("Получена другая информация: ", request)
+		server.InfoLog.Println("Получена другая информация:", request)
 	}
 }
