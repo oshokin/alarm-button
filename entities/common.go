@@ -2,6 +2,7 @@ package entities
 
 import (
 	"crypto"
+	_ "crypto/sha512"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,10 +20,12 @@ import (
 )
 
 const (
-	CurrentVersion          string        = "1.1.0"
-	VersionFileName         string        = "button-version.yaml"
-	UpdateMarkerFileName    string        = "button-update-marker.bin"
-	DefaultFileMode         os.FileMode   = 0755
+	CurrentVersion       string      = "1.1.0"
+	VersionFileName      string      = "button-version.yaml"
+	UpdateMarkerFileName string      = "button-update-marker.bin"
+	DefaultFileMode      os.FileMode = 0755
+	//хеш-функция должна быть импортирована выше, иначе ничего не заработает
+	//import _ "crypto/sha512"
 	DefaultChecksumFunction crypto.Hash   = crypto.SHA512
 	clientBufferSize        uint          = 1024
 	clientSleepTime         time.Duration = 5 * time.Second
@@ -374,7 +377,7 @@ func GetFileChecksum(fileName string) ([]byte, error) {
 	}
 	hasher := DefaultChecksumFunction.New()
 	hasher.Write(contents)
-	newFileChecksum := hasher.Sum(contents)
+	newFileChecksum := hasher.Sum(nil)
 
 	return newFileChecksum[:], nil
 }

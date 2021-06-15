@@ -135,16 +135,20 @@ func (updater *Updater) Run() {
 		updater.Stop(1)
 	}
 	updater.InfoLog.Println("Загружаю файлы обновления во временную папку")
-	err = updater.downloadFiles()
-	if err != nil {
-		updater.ErrorLog.Println("Ошибка при загрузке файлов с сервера:", err.Error())
-		updater.Stop(1)
-	}
-	updater.InfoLog.Println("Обновляю файлы на клиенте")
-	err = updater.updateFiles()
-	if err != nil {
-		updater.ErrorLog.Println("Ошибка при обновлении файлов на клиенте:", err.Error())
-		updater.Stop(1)
+	if updater.IsUpdateNeeded {
+		err = updater.downloadFiles()
+		if err != nil {
+			updater.ErrorLog.Println("Ошибка при загрузке файлов с сервера:", err.Error())
+			updater.Stop(1)
+		}
+		updater.InfoLog.Println("Обновляю файлы на клиенте")
+		err = updater.updateFiles()
+		if err != nil {
+			updater.ErrorLog.Println("Ошибка при обновлении файлов на клиенте:", err.Error())
+			updater.Stop(1)
+		}
+	} else {
+		updater.InfoLog.Println("Обновление не требуется")
 	}
 	updater.Stop(0)
 }

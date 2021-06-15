@@ -10,5 +10,10 @@ packager/server.exe
 packager/updater.exe
 packager/button-version.yaml
 server/server.exe
+updater/button-off.exe
+updater/button-on.exe
+updater/checker.exe
+updater/packager.exe
+updater/server.exe
 updater/updater.exe
 updater/button-version.yaml
