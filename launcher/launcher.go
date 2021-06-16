@@ -61,7 +61,7 @@ func (launcher *Launcher) executeCommand() error {
 	head := os.Args[1]
 	args := os.Args[2:len(os.Args)]
 	cmd := exec.Command(head, args...)
-	err := cmd.Run()
-
+	output, err := cmd.CombinedOutput()
+	launcher.InfoLog.Printf("Результат работы программы: \n%s", string(output))
 	return err
 }
