@@ -17,12 +17,11 @@ type Packager struct {
 }
 
 func NewPackager() (*Packager, error) {
-	packager := Packager{
+	return &Packager{
 		UpdateDescription: nil,
 		InfoLog:           log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime),
 		ErrorLog:          log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile),
-	}
-	return &packager, nil
+	}, nil
 }
 
 func main() {
@@ -46,7 +45,7 @@ func (packager *Packager) Run() {
 
 func (packager *Packager) fillUpdateDescription() error {
 	packager.UpdateDescription = entities.NewUpdateDescription()
-	allFiles := []string{"button-off.exe", "button-on.exe", "checker.exe", "server.exe", "updater.exe"}
+	allFiles := []string{"button-off.exe", "button-on.exe", "checker.exe", "launcher.exe", "server.exe", "updater.exe"}
 	for _, fileName := range allFiles {
 		if _, err := os.Stat(fileName); os.IsNotExist(err) {
 			return fmt.Errorf(fmt.Sprintf("%s не найден", fileName))
@@ -57,8 +56,8 @@ func (packager *Packager) fillUpdateDescription() error {
 		}
 		packager.UpdateDescription.Files[fileName] = base64.StdEncoding.EncodeToString(fileChecksum)
 	}
-	packager.UpdateDescription.Roles["user"] = []string{"button-on.exe", "checker.exe", "updater.exe"}
-	packager.UpdateDescription.Roles["advanced-user"] = []string{"button-off.exe", "button-on.exe", "checker.exe", "updater.exe"}
+	packager.UpdateDescription.Roles["user"] = []string{"button-on.exe", "checker.exe", "launcher.exe", "updater.exe"}
+	packager.UpdateDescription.Roles["advanced-user"] = []string{"button-off.exe", "button-on.exe", "checker.exe", "launcher.exe", "updater.exe"}
 	packager.UpdateDescription.Roles["server"] = allFiles
 
 	return nil

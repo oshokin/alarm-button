@@ -20,10 +20,12 @@ import (
 )
 
 const (
-	CurrentVersion       string      = "1.1.0"
-	VersionFileName      string      = "button-version.yaml"
-	UpdateMarkerFileName string      = "button-update-marker.bin"
-	DefaultFileMode      os.FileMode = 0755
+	CurrentVersion       string        = "1.1.0"
+	LauncherSleepTime    time.Duration = 1 * time.Second
+	UpdateMarkerLifeTime time.Duration = 30 * time.Second
+	VersionFileName      string        = "button-version.yaml"
+	UpdateMarkerFileName string        = "button-update-marker.bin"
+	DefaultFileMode      os.FileMode   = 0755
 	//хеш-функция должна быть импортирована выше, иначе ничего не заработает
 	//import _ "crypto/sha512"
 	DefaultChecksumFunction crypto.Hash   = crypto.SHA512

@@ -2,9 +2,11 @@
 button-off/button-off.exe
 button-on/button-on.exe
 checker/checker.exe
+launcher/launcher.exe
 packager/button-off.exe
 packager/button-on.exe
 packager/checker.exe
+packager/launcher.exe
 packager/packager.exe
 packager/server.exe
 packager/updater.exe
@@ -13,6 +15,7 @@ server/server.exe
 updater/button-off.exe
 updater/button-on.exe
 updater/checker.exe
+updater/launcher.exe
 updater/packager.exe
 updater/server.exe
 updater/updater.exe
