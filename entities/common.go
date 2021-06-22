@@ -23,8 +23,8 @@ const (
 	CurrentVersion       string        = "1.1.0"
 	LauncherSleepTime    time.Duration = 1 * time.Second
 	UpdateMarkerLifeTime time.Duration = 30 * time.Second
-	VersionFileName      string        = "button-version.yaml"
-	UpdateMarkerFileName string        = "button-update-marker.bin"
+	VersionFileName      string        = "alarm-button-version.yaml"
+	UpdateMarkerFileName string        = "alarm-button-update-marker.bin"
 	DefaultFileMode      os.FileMode   = 0755
 	//хеш-функция должна быть импортирована выше, иначе ничего не заработает
 	//import _ "crypto/sha512"
