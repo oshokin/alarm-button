@@ -148,6 +148,7 @@ func NewUpdateDescription() *UpdateDescription {
 		VersionNumber: CurrentVersion,
 		Files:         make(map[string]string, 16),
 		Roles:         make(map[string][]string, 16),
+		Executables:   make(map[string]string, 16),
 	}
 }
 
