@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -17,17 +18,27 @@ type Packager struct {
 }
 
 func NewPackager() (*Packager, error) {
-	return &Packager{
+	packager := Packager{
 		UpdateDescription: nil,
 		InfoLog:           log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime),
 		ErrorLog:          log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile),
-	}, nil
+	}
+	isUpdaterRunningNow := entities.IsUpdaterRunningNow(packager.InfoLog, packager.ErrorLog)
+	if isUpdaterRunningNow {
+		return &packager, errors.New("the updater is running now")
+	}
+	err := entities.ReadCommonSettingsFromArgs()
+	return &packager, err
 }
 
 func main() {
 	packager, err := NewPackager()
 	if err != nil {
-		packager.ErrorLog.Fatalln("Ошибка при запуске упаковщика:", err.Error())
+		packager.ErrorLog.Fatalln("Error while launching packager:", err.Error())
+	}
+	err = entities.SaveCommonSettingsToFile()
+	if err != nil {
+		packager.ErrorLog.Fatalln("Error while saving settings to a file:", err.Error())
 	}
 	packager.Run()
 }
@@ -35,20 +46,25 @@ func main() {
 func (packager *Packager) Run() {
 	err := packager.fillUpdateDescription()
 	if err != nil {
-		packager.ErrorLog.Fatalln("Ошибка при подготовке описания обновления:", err.Error())
+		packager.ErrorLog.Fatalln("Error while preparing update description:", err.Error())
 	}
 	err = packager.saveUpdateDescriptionToFile()
 	if err != nil {
-		packager.ErrorLog.Fatalln("Ошибка при сохранении описания обновления:", err.Error())
+		packager.ErrorLog.Fatalln("Error while saving update description:", err.Error())
 	}
 }
 
 func (packager *Packager) fillUpdateDescription() error {
 	packager.UpdateDescription = entities.NewUpdateDescription()
-	allFiles := []string{"button-off.exe", "button-on.exe", "checker.exe", "launcher.exe", "server.exe", "updater.exe"}
-	for _, fileName := range allFiles {
+	for key, value := range entities.AllowedUserRoles {
+		packager.UpdateDescription.Roles[key] = value
+	}
+	for key, value := range entities.ExecutablesByUserRoles {
+		packager.UpdateDescription.Executables[key] = value
+	}
+	for _, fileName := range entities.AllExecutableFiles {
 		if _, err := os.Stat(fileName); os.IsNotExist(err) {
-			return fmt.Errorf(fmt.Sprintf("%s не найден", fileName))
+			return fmt.Errorf(fmt.Sprintf("%s wasn't found", fileName))
 		}
 		fileChecksum, err := entities.GetFileChecksum(fileName)
 		if err != nil {
@@ -56,10 +72,6 @@ func (packager *Packager) fillUpdateDescription() error {
 		}
 		packager.UpdateDescription.Files[fileName] = base64.StdEncoding.EncodeToString(fileChecksum)
 	}
-	packager.UpdateDescription.Roles["user"] = []string{"button-on.exe", "checker.exe", "launcher.exe", "updater.exe"}
-	packager.UpdateDescription.Roles["advanced-user"] = []string{"button-off.exe", "button-on.exe", "checker.exe", "launcher.exe", "updater.exe"}
-	packager.UpdateDescription.Roles["server"] = allFiles
-
 	return nil
 }
 
@@ -72,6 +84,5 @@ func (packager *Packager) saveUpdateDescriptionToFile() error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }

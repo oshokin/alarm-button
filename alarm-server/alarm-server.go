@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -58,6 +59,14 @@ func NewServer() (*Server, error) {
 	server.InfoLog.SetOutput(server.FileLog)
 	server.ErrorLog.SetOutput(server.FileLog)
 
+	isUpdaterRunningNow := entities.IsUpdaterRunningNow(server.InfoLog, server.ErrorLog)
+	if isUpdaterRunningNow {
+		return &server, errors.New("the updater is running now")
+	}
+	err = entities.ReadCommonSettingsFromFile()
+	if err != nil {
+		return &server, err
+	}
 	port, err := parseServerArgs()
 	if err != nil {
 		return &server, err
@@ -67,28 +76,22 @@ func NewServer() (*Server, error) {
 }
 
 func parseServerArgs() (string, error) {
-	areArgsCorrect := true
 	port := ""
-
-	if len(os.Args) < 2 {
-		areArgsCorrect = false
-	} else {
-		port = os.Args[1]
-		if _, err := strconv.Atoi(port); err != nil {
-			areArgsCorrect = false
-		}
+	if entities.Settings == nil {
+		return port, errors.New("settings are not filled")
 	}
-	if areArgsCorrect {
-		return port, nil
-	} else {
-		return "", errors.New("порт сервера не указан или указан неверно")
+	resolvedSocket, err := net.ResolveTCPAddr("tcp", entities.Settings.ServerSocket)
+	if err != nil {
+		return port, fmt.Errorf("invalid server address, %s", err.Error())
 	}
+	port = strconv.Itoa(resolvedSocket.Port)
+	return port, nil
 }
 
 func main() {
 	server, err := NewServer()
 	if err != nil {
-		server.ErrorLog.Println("Ошибка при запуске сервера:", err.Error())
+		server.ErrorLog.Println("Error when starting the server:", err.Error())
 		server.Stop(1)
 	}
 	server.Run()
@@ -97,14 +100,14 @@ func main() {
 func (server *Server) Run() {
 	listener, err := net.Listen("tcp", server.Socket)
 	if err != nil {
-		server.ErrorLog.Fatal("Ошибка при запуске сервера:", err.Error())
+		server.ErrorLog.Fatal("Error when starting the server:", err.Error())
 	}
 	defer listener.Close()
-	server.InfoLog.Println("Сервер запущен на", server.Socket)
+	server.InfoLog.Println("The server is running on", server.Socket)
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
-			server.ErrorLog.Println("Ошибка при ожидании соединения:", err.Error())
+			server.ErrorLog.Println("Error while waiting for connection:", err.Error())
 			continue
 		}
 		go server.decodeClientRequest(connection)
@@ -113,7 +116,7 @@ func (server *Server) Run() {
 
 func (server *Server) Stop(exitCode int) {
 	if server.InfoLog != nil {
-		server.InfoLog.Println("Сервер остановлен")
+		server.InfoLog.Println("The server has been shut down")
 		defer server.InfoLog.SetOutput(os.Stdout)
 	}
 
@@ -131,23 +134,23 @@ func (server *Server) decodeClientRequest(connection net.Conn) {
 	byteBuf := make([]byte, serverBufferSize)
 	bytesRead, err := connection.Read(byteBuf)
 	if err != nil {
-		server.ErrorLog.Println("Ошибка при чтении сообщения:", err.Error())
+		server.ErrorLog.Println("Error while reading message:", err.Error())
 	}
 	message := &entities.Message{}
 	if err := json.Unmarshal(byteBuf[:bytesRead], &message); err != nil {
-		server.ErrorLog.Println("Ошибка при обработке сообщения:", err.Error())
+		server.ErrorLog.Println("Error while processing message:", err.Error())
 	}
 	switch message.Type {
 	case "AlarmRequest":
 		alarmRequest := entities.AlarmRequest{}
 		if err := json.Unmarshal(*message.Data, &alarmRequest); err != nil {
-			server.ErrorLog.Println("Ошибка при обработке сообщения:", err.Error())
+			server.ErrorLog.Println("Error while processing message:", err.Error())
 		}
 		server.processClientRequest(connection, alarmRequest)
 	case "StateRequest":
 		stateRequest := entities.StateRequest{}
 		if err := json.Unmarshal(*message.Data, &stateRequest); err != nil {
-			server.ErrorLog.Println("Ошибка при обработке сообщения:", err.Error())
+			server.ErrorLog.Println("Error while processing message:", err.Error())
 		}
 		server.processClientRequest(connection, stateRequest)
 	default:
@@ -160,26 +163,26 @@ func (server *Server) processClientRequest(connection net.Conn, request interfac
 	switch request.(type) {
 	case entities.AlarmRequest:
 		alarmRequest := request.(entities.AlarmRequest)
-		server.InfoLog.Println("Получено оповещение о тревоге:", alarmRequest.String())
+		server.InfoLog.Println("Alarm alert received:", alarmRequest.String())
 		server.CurrentState = alarmRequest.GetStateResponse()
-		server.InfoLog.Println("Текущее состояние:", server.CurrentState.String())
+		server.InfoLog.Println("Current state of the alarm button:", server.CurrentState.String())
 		response, err := alarmRequest.GetAlarmResponse().Serialize()
 		if err != nil {
-			server.ErrorLog.Println("Ошибка при формировании ответа:", err.Error())
+			server.ErrorLog.Println("Error while forming a response:", err.Error())
 		} else {
 			connection.Write(response)
 		}
 	case entities.StateRequest:
 		stateRequest := request.(entities.StateRequest)
-		server.InfoLog.Println("Получен запрос на проверку состояния:", stateRequest.String())
+		server.InfoLog.Println("Status check request received:", stateRequest.String())
 		response, err := server.CurrentState.Serialize()
 		if err != nil {
-			server.ErrorLog.Println("Ошибка при формировании ответа:", err.Error())
+			server.ErrorLog.Println("Error while forming a response:", err.Error())
 		} else {
 			connection.Write(response)
-			server.InfoLog.Println("Клиенту отправлено состояние:", server.CurrentState.String())
+			server.InfoLog.Println("Status sent to client:", server.CurrentState.String())
 		}
 	default:
-		server.InfoLog.Println("Получена другая информация:", request)
+		server.InfoLog.Println("Other information received:", request)
 	}
 }

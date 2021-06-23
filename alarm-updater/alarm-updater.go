@@ -12,20 +12,21 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/doitdistributed/go-update"
-	"github.com/hashicorp/go-version"
+	"github.com/mitchellh/go-ps"
 	"github.com/oshokin/alarm-button/entities"
 	"gopkg.in/yaml.v3"
 )
 
 type Updater struct {
-	ServerUpdateFolder string
-	UpdateType         string
 	UpdateDescription  *entities.UpdateDescription
 	IsUpdateNeeded     bool
 	InfoLog            *log.Logger
@@ -47,6 +48,10 @@ func NewUpdater() (*Updater, error) {
 		<-updater.interruptChannel
 		updater.Stop(1)
 	}()
+	isUpdaterRunningNow := entities.IsUpdaterRunningNow(updater.InfoLog, updater.ErrorLog)
+	if isUpdaterRunningNow {
+		return &updater, errors.New("the updater is already running")
+	}
 	updateMarker, err := os.Create(entities.UpdateMarkerFileName)
 	if err != nil {
 		return &updater, err
@@ -55,34 +60,27 @@ func NewUpdater() (*Updater, error) {
 	if err != nil {
 		return &updater, err
 	}
-	serverUpdateFolder, updateType, err := parseUpdaterArgs()
+	err = entities.ReadCommonSettingsFromFile()
 	if err != nil {
 		return &updater, err
 	}
-	updater.ServerUpdateFolder = serverUpdateFolder
-	updater.UpdateType = updateType
-
+	entities.Settings.UpdateType, err = parseUpdaterArgs()
+	if err != nil {
+		return &updater, err
+	}
 	return &updater, nil
 }
 
-func parseUpdaterArgs() (string, string, error) {
-	areArgsCorrect := true
-	serverUpdateFolder := ""
-	updateTypePointer := flag.String("type", "user", "роль пользователя")
+func parseUpdaterArgs() (string, error) {
+	updateTypePointer := flag.String("type", "client", "user role")
 	flag.Parse()
-	if len(flag.Args()) < 1 {
-		areArgsCorrect = false
-	} else {
-		serverUpdateFolder = flag.Arg(0)
-	}
 	var err error
-	if !areArgsCorrect {
-		err = errors.New("URL файла с описанием обновления не указан или указан неверно")
+	if len(flag.Args()) > 0 {
+		err = errors.New("invalid command line arguments")
 	} else {
 		err = nil
 	}
-
-	return serverUpdateFolder, *updateTypePointer, err
+	return *updateTypePointer, err
 }
 
 func (updater *Updater) Stop(exitCode int) {
@@ -90,18 +88,18 @@ func (updater *Updater) Stop(exitCode int) {
 	if err == nil {
 		err := os.Remove(entities.UpdateMarkerFileName)
 		if err != nil && updater.ErrorLog != nil {
-			updater.ErrorLog.Println("Ошибка при удалении маркера обновления:", err.Error())
+			updater.ErrorLog.Println("Error while deleting the update marker:", err.Error())
 		}
 	}
 	_, err = os.Stat(updater.temporaryDirectory)
 	if err == nil {
 		err := os.RemoveAll(updater.temporaryDirectory)
 		if err != nil && updater.ErrorLog != nil {
-			updater.ErrorLog.Println("Ошибка при удалении временного каталога:", err.Error())
+			updater.ErrorLog.Println("Error while deleting the temporary directory:", err.Error())
 		}
 	}
 	if updater.InfoLog != nil {
-		updater.InfoLog.Println("Обновитель остановлен")
+		updater.InfoLog.Println("The updater has been stopped")
 	}
 	os.Exit(exitCode)
 }
@@ -109,48 +107,83 @@ func (updater *Updater) Stop(exitCode int) {
 func main() {
 	updater, err := NewUpdater()
 	if err != nil {
-		updater.ErrorLog.Println("Ошибка при запуске обновителя:", err.Error())
+		updater.ErrorLog.Println("Error while launching the updater:", err.Error())
 		updater.Stop(1)
 	}
 	updater.Run()
 }
 
 func (updater *Updater) Run() {
-	updater.InfoLog.Println("Загружаю описание обновления с сервера")
-	err := updater.fillUpdateDescription()
+	updater.InfoLog.Println("Terminating alarm button processes forcibly")
+	err := updater.terminateAlarmButtonProcesses()
 	if err != nil {
-		updater.ErrorLog.Println("Ошибка при загрузке описания версии:", err.Error())
+		updater.ErrorLog.Println("Error while terminating alarm button processes:", err.Error())
 		updater.Stop(1)
 	}
-	updater.InfoLog.Println("Сравниваю версии на клиенте и сервере")
-	err = updater.checkVersion()
+	updater.InfoLog.Println("Downloading the update description from the server")
+	err = updater.fillUpdateDescription()
 	if err != nil {
-		updater.ErrorLog.Println("Ошибка при сравнении версий:", err.Error())
+		updater.ErrorLog.Println("Error while downloading version description:", err.Error())
 		updater.Stop(1)
 	}
-	updater.InfoLog.Println("Сверяю контрольную сумму файлов на клиенте и сервере")
+	updater.InfoLog.Println("Verifying the checksum of files on the client and server")
 	err = updater.validateChecksum()
 	if err != nil {
-		updater.ErrorLog.Println("Ошибка при сверке контрольной суммы:", err.Error())
+		updater.ErrorLog.Println("Error while verifying the checksum:", err.Error())
 		updater.Stop(1)
 	}
 	if updater.IsUpdateNeeded {
-		updater.InfoLog.Println("Загружаю файлы обновления во временную папку")
+		updater.InfoLog.Println("Downloading update files to a temporary folder")
 		err = updater.downloadFiles()
 		if err != nil {
-			updater.ErrorLog.Println("Ошибка при загрузке файлов с сервера:", err.Error())
+			updater.ErrorLog.Println("Error while downloading files from the server:", err.Error())
 			updater.Stop(1)
 		}
-		updater.InfoLog.Println("Обновляю файлы на клиенте")
+		updater.InfoLog.Println("Updating files on the client")
 		err = updater.updateFiles()
 		if err != nil {
-			updater.ErrorLog.Println("Ошибка при обновлении файлов на клиенте:", err.Error())
+			updater.ErrorLog.Println("Error while updating files on the client:", err.Error())
 			updater.Stop(1)
 		}
 	} else {
-		updater.InfoLog.Println("Обновление не требуется")
+		updater.InfoLog.Println("No update required")
 	}
+	updater.InfoLog.Println("Starting required executables")
+	err = updater.startRequiredExecutables()
+	if err != nil {
+		updater.ErrorLog.Println("Error while starting required executables:", err.Error())
+		updater.Stop(1)
+	}
+	updater.InfoLog.Println("Exiting the updater now")
 	updater.Stop(0)
+}
+
+func (updater *Updater) terminateAlarmButtonProcesses() error {
+	executableFiles := entities.SliceToStringMap(entities.AllExecutableFiles)
+	processList, err := ps.Processes()
+	if err != nil {
+		return err
+	}
+	thisProcessID := os.Getpid()
+	for processIndex := range processList {
+		process := processList[processIndex]
+		processID := process.Pid()
+		if processID == thisProcessID {
+			continue
+		}
+		processName := process.Executable()
+		if _, found := executableFiles[processName]; found {
+			runningProcess, err := os.FindProcess(processID)
+			if err != nil {
+				return err
+			}
+			err = runningProcess.Kill()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (updater *Updater) fillUpdateDescription() error {
@@ -169,12 +202,11 @@ func (updater *Updater) fillUpdateDescription() error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
 func (updater *Updater) getFileBodyFromServer(fileName string) (*http.Response, error) {
-	serverUpdateURL, err := url.Parse(updater.ServerUpdateFolder)
+	serverUpdateURL, err := url.Parse(entities.Settings.ServerUpdateFolder)
 	if err != nil {
 		return nil, err
 	}
@@ -190,29 +222,15 @@ func (updater *Updater) getFileBodyFromServer(fileName string) (*http.Response, 
 	return response, err
 }
 
-func (updater *Updater) checkVersion() error {
-	clientVersion, err := version.NewVersion(entities.CurrentVersion)
-	if err != nil {
-		return err
-	}
-	serverVersion, err := version.NewVersion(updater.UpdateDescription.VersionNumber)
-	if err != nil {
-		return err
-	}
-	updater.IsUpdateNeeded = (clientVersion.LessThan(serverVersion))
-
-	return nil
-}
-
 func (updater *Updater) validateChecksum() error {
-	files, areRolesFound := updater.UpdateDescription.Roles[updater.UpdateType]
+	files, areRolesFound := updater.UpdateDescription.Roles[entities.Settings.UpdateType]
 	if !areRolesFound {
-		return fmt.Errorf("не найден список файлов для роли %s", updater.UpdateType)
+		return fmt.Errorf("unable to find a list of files for the user role %s", entities.Settings.UpdateType)
 	}
 	for _, fileName := range files {
 		serverFileBase64, isServerChecksumFound := updater.UpdateDescription.Files[fileName]
 		if !isServerChecksumFound {
-			return fmt.Errorf("на сервере не задана контрольная сумма файла %s", fileName)
+			return fmt.Errorf("the checksum of the file %s is not set on the server", fileName)
 		}
 		serverFileChecksum, err := base64.StdEncoding.DecodeString(serverFileBase64)
 		if err != nil {
@@ -241,7 +259,6 @@ func (updater *Updater) validateChecksum() error {
 			return nil
 		}
 	}
-
 	return nil
 }
 
@@ -251,8 +268,7 @@ func (updater *Updater) downloadFiles() error {
 		return err
 	}
 	updater.temporaryDirectory = temporaryDirectory
-	files := updater.UpdateDescription.Roles[updater.UpdateType]
-
+	files := updater.UpdateDescription.Roles[entities.Settings.UpdateType]
 	for _, fileName := range files {
 		response, err := updater.getFileBodyFromServer(fileName)
 		if err != nil {
@@ -275,23 +291,22 @@ func (updater *Updater) downloadFiles() error {
 			return err
 		}
 		updater.downloadedFiles[fileName] = outputFileName
-		updater.InfoLog.Printf("Успешно загружен файл %s\n", outputFileName)
+		updater.InfoLog.Printf("The file %s was downloaded successfully\n", outputFileName)
 	}
-
 	return nil
 }
 
 func (updater *Updater) updateFiles() error {
 	for fileName, downloadedFileName := range updater.downloadedFiles {
-		updater.InfoLog.Printf("Обновляю файл %s\n", fileName)
+		updater.InfoLog.Printf("Updating the file %s\n", fileName)
 		data, err := os.ReadFile(downloadedFileName)
 		if err != nil {
 			return err
 		}
-		updater.InfoLog.Printf("Ищу контрольную сумму")
+		updater.InfoLog.Printf("Looking for a checksum")
 		downloadedFileBase64, isChecksumFound := updater.UpdateDescription.Files[fileName]
 		if !isChecksumFound {
-			return fmt.Errorf("не задана контрольная сумма файла %s", downloadedFileName)
+			return fmt.Errorf("the checksum of the %s file is not set", downloadedFileName)
 		}
 		downloadedFileChecksum, err := base64.StdEncoding.DecodeString(downloadedFileBase64)
 		if err != nil {
@@ -303,7 +318,7 @@ func (updater *Updater) updateFiles() error {
 				return err
 			}
 		}
-		updater.InfoLog.Printf("Применяю обновление")
+		updater.InfoLog.Printf("Applying update")
 		options := &update.Options{
 			TargetPath: fileName,
 			TargetMode: entities.DefaultFileMode,
@@ -321,4 +336,19 @@ func (updater *Updater) updateFiles() error {
 		}
 	}
 	return nil
+}
+
+func (updater *Updater) startRequiredExecutables() error {
+	executable, isExecutableFound := updater.UpdateDescription.Executables[entities.Settings.UpdateType]
+	if !isExecutableFound {
+		return fmt.Errorf("unable to find a executable for the user role %s", entities.Settings.UpdateType)
+	}
+	osLC := strings.ToLower(runtime.GOOS)
+	if strings.Contains(osLC, "linux") || strings.Contains(osLC, "darwin") {
+		return exec.Command(executable).Start()
+	} else if strings.Contains(osLC, "windows") {
+		return exec.Command("cmd.exe", "/C", "start", executable).Start()
+	} else {
+		return fmt.Errorf("%s OS is not supported", runtime.GOOS)
+	}
 }

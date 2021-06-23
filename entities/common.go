@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,14 +18,21 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mitchellh/go-ps"
+	"gopkg.in/yaml.v3"
 )
 
 const (
-	CurrentVersion       string        = "1.1.0"
+	CurrentVersion       string        = "1.2.0"
 	LauncherSleepTime    time.Duration = 1 * time.Second
 	UpdateMarkerLifeTime time.Duration = 30 * time.Second
+	SettingsFileName     string        = "alarm-button-settings.yaml"
 	VersionFileName      string        = "alarm-button-version.yaml"
 	UpdateMarkerFileName string        = "alarm-button-update-marker.bin"
+	ServerExecutable     string        = "alarm-server.exe"
+	CheckerExecutable    string        = "alarm-checker.exe"
+	UpdaterExecutable    string        = "alarm-updater.exe"
 	DefaultFileMode      os.FileMode   = 0755
 	//хеш-функция должна быть импортирована выше, иначе ничего не заработает
 	//import _ "crypto/sha512"
@@ -33,18 +41,106 @@ const (
 	clientSleepTime         time.Duration = 5 * time.Second
 )
 
-type Serializable interface {
-	Serialize() ([]byte, error)
+var (
+	Settings         *CommonSettings
+	AllowedUserRoles = map[string][]string{
+		"client": {"alarm-button-on.exe", CheckerExecutable, UpdaterExecutable, SettingsFileName},
+		"server": {"alarm-button-off.exe", ServerExecutable, UpdaterExecutable, SettingsFileName},
+	}
+	ExecutablesByUserRoles = map[string]string{
+		"client": CheckerExecutable,
+		"server": ServerExecutable,
+	}
+	AllExecutableFiles = []string{"alarm-button-off.exe", "alarm-button-on.exe", CheckerExecutable, ServerExecutable, UpdaterExecutable}
+)
+
+type CommonSettings struct {
+	ServerUpdateFolder string `yaml:"updateFolder"`
+	ServerSocket       string `yaml:"serverSocket"`
+	UpdateType         string `yaml:"-"`
 }
 
-type VersionDescription struct {
-	VersionNumber string `yaml:"version"`
+func ReadCommonSettingsFromFile() error {
+	_, err := os.Stat(SettingsFileName)
+	if err != nil {
+		return err
+	} else {
+		data, err := os.ReadFile(SettingsFileName)
+		if err != nil {
+			return err
+		}
+		err = yaml.Unmarshal(data, &Settings)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = url.ParseRequestURI(Settings.ServerUpdateFolder)
+	if err != nil {
+		return fmt.Errorf("invalid URI of updates folder, %s", err.Error())
+	}
+	_, err = net.ResolveTCPAddr("tcp", Settings.ServerSocket)
+	if err != nil {
+		return fmt.Errorf("invalid server address, %s", err.Error())
+	}
+	return nil
+}
+
+func ReadCommonSettingsFromArgs() error {
+	serverUpdateFolder := ""
+	serverSocket := ""
+	parsingError := errors.New(
+		"not all required parameters are specified - " +
+			"the first parameter must be the URI of updates folder (for example, https://localhost.ru/alarm-button), " +
+			"the second parameter must be the server socket (for example, 127.0.0.1:8080)")
+	flag.Parse()
+	if len(flag.Args()) == 2 {
+		serverUpdateFolder = flag.Arg(0)
+		serverSocket = flag.Arg(1)
+		_, err := url.ParseRequestURI(serverUpdateFolder)
+		if err != nil {
+			parsingError = fmt.Errorf("invalid URI of updates folder, %s", err.Error())
+		} else {
+			parsingError = nil
+		}
+		if parsingError == nil {
+			_, err := net.ResolveTCPAddr("tcp", serverSocket)
+			if err != nil {
+				parsingError = fmt.Errorf("invalid server address, %s", err.Error())
+			} else {
+				parsingError = nil
+			}
+		}
+	}
+	if parsingError == nil {
+		Settings = &CommonSettings{
+			ServerUpdateFolder: serverUpdateFolder,
+			ServerSocket:       serverSocket,
+			UpdateType:         "",
+		}
+	}
+	return parsingError
+}
+
+func SaveCommonSettingsToFile() error {
+	if Settings == nil {
+		return errors.New("settings are not set")
+	}
+	contents, err := yaml.Marshal(Settings)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(SettingsFileName, contents, DefaultFileMode)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 type UpdateDescription struct {
 	VersionNumber string              `yaml:"version"`
 	Files         map[string]string   `yaml:"files"`
 	Roles         map[string][]string `yaml:"roles"`
+	Executables   map[string]string   `yaml:"executables"`
 }
 
 func NewUpdateDescription() *UpdateDescription {
@@ -53,6 +149,10 @@ func NewUpdateDescription() *UpdateDescription {
 		Files:         make(map[string]string, 16),
 		Roles:         make(map[string][]string, 16),
 	}
+}
+
+type Serializable interface {
+	Serialize() ([]byte, error)
 }
 
 type Message struct {
@@ -81,7 +181,7 @@ func NewInitiatorData() (*InitiatorData, error) {
 }
 
 func (initiatorData *InitiatorData) String() string {
-	return fmt.Sprintf("хост: %v, пользователь: %v", initiatorData.Host, initiatorData.User)
+	return fmt.Sprintf("host: %v, user: %v", initiatorData.Host, initiatorData.User)
 }
 
 type AlarmRequest struct {
@@ -104,11 +204,11 @@ func (alarmRequest *AlarmRequest) GetStateResponse() *StateResponse {
 func (alarmRequest *AlarmRequest) String() string {
 	var buttonPressed string
 	if alarmRequest.IsAlarmButtonPressed {
-		buttonPressed = "да"
+		buttonPressed = "yes"
 	} else {
-		buttonPressed = "нет"
+		buttonPressed = "no"
 	}
-	return fmt.Sprintf("инициатор: %v, кнопка нажата: %v", alarmRequest.Initiator.String(), buttonPressed)
+	return fmt.Sprintf("initiator: %v, button is pressed: %v", alarmRequest.Initiator.String(), buttonPressed)
 }
 
 func (alarmRequest *AlarmRequest) Serialize() ([]byte, error) {
@@ -123,11 +223,11 @@ type AlarmResponse struct {
 func (alarmResponse *AlarmResponse) String() string {
 	var buttonPressed string
 	if alarmResponse.IsAlarmButtonPressed {
-		buttonPressed = "да"
+		buttonPressed = "yes"
 	} else {
-		buttonPressed = "нет"
+		buttonPressed = "no"
 	}
-	return fmt.Sprintf("%v, кнопка нажата: %v", alarmResponse.DateTime.Format(time.RFC3339), buttonPressed)
+	return fmt.Sprintf("%v, button is pressed: %v", alarmResponse.DateTime.Format(time.RFC3339), buttonPressed)
 }
 
 func (alarmResponse *AlarmResponse) Serialize() ([]byte, error) {
@@ -143,7 +243,7 @@ func NewStateRequest(client *Client) *StateRequest {
 }
 
 func (stateRequest *StateRequest) String() string {
-	return fmt.Sprintf("инициатор: %v", stateRequest.Initiator.String())
+	return fmt.Sprintf("initiator: %v", stateRequest.Initiator.String())
 }
 
 func (stateRequest *StateRequest) Serialize() ([]byte, error) {
@@ -167,11 +267,11 @@ func NewStateResponse(data *InitiatorData, buttonPressed bool) *StateResponse {
 func (stateResponse *StateResponse) String() string {
 	var buttonPressed string
 	if stateResponse.IsAlarmButtonPressed {
-		buttonPressed = "да"
+		buttonPressed = "yes"
 	} else {
-		buttonPressed = "нет"
+		buttonPressed = "no"
 	}
-	return fmt.Sprintf("%v, инициатор: %v, кнопка нажата: %v",
+	return fmt.Sprintf("%v, initiator: %v, button is pressed: %v",
 		stateResponse.DateTime.Format(time.RFC3339),
 		stateResponse.Initiator.String(),
 		buttonPressed)
@@ -183,7 +283,6 @@ func (stateResponse *StateResponse) Serialize() ([]byte, error) {
 
 type Client struct {
 	Initiator            *InitiatorData
-	ServerSocket         string
 	OperatingSystem      string
 	IsAlarmButtonPressed bool
 	InfoLog              *log.Logger
@@ -195,7 +294,6 @@ type Client struct {
 func NewClient() (*Client, error) {
 	client := Client{
 		Initiator:        nil,
-		ServerSocket:     "",
 		OperatingSystem:  runtime.GOOS,
 		InfoLog:          log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime),
 		ErrorLog:         log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile),
@@ -206,45 +304,47 @@ func NewClient() (*Client, error) {
 		<-client.interruptChannel
 		client.Stop(false, 1)
 	}()
+	isUpdaterRunningNow := IsUpdaterRunningNow(client.InfoLog, client.ErrorLog)
+	if isUpdaterRunningNow {
+		return &client, errors.New("the updater is running now")
+	}
+	err := ReadCommonSettingsFromFile()
+	if err != nil {
+		return &client, err
+	}
 	initiatorData, err := NewInitiatorData()
 	if err != nil {
 		return &client, err
 	}
 	client.Initiator = initiatorData
-	serverSocket, debugMode, err := parseClientArgs()
+	debugMode, err := parseClientArgs()
 	if err != nil {
 		return &client, err
 	}
-	client.ServerSocket = serverSocket
 	client.debugMode = debugMode
 	return &client, nil
 }
 
-func parseClientArgs() (string, bool, error) {
-	serverSocket := ""
-	parsingError := errors.New("укажите адрес сервера (хост:порт)")
-	debugModePointer := flag.Bool("debug", false, "режим отладки (ПК не выключается)")
+func parseClientArgs() (bool, error) {
+	debugModePointer := flag.Bool("debug", false, "debug mode (PC does not turn off)")
 	flag.Parse()
+	var err error
 	if len(flag.Args()) > 0 {
-		serverSocket = flag.Arg(0)
-		_, err := net.ResolveTCPAddr("tcp", serverSocket)
-		if err != nil {
-			parsingError = fmt.Errorf("некорректный адрес сервера, %s", err.Error())
-		} else {
-			parsingError = nil
-		}
+		err = errors.New("invalid command line arguments")
+	} else {
+		err = nil
 	}
-	return serverSocket, *debugModePointer, parsingError
+	return *debugModePointer, err
 }
 
 func (client *Client) RunChecker() {
 	request, err := NewStateRequest(client).Serialize()
 	if err != nil {
-		client.ErrorLog.Println("Ошибка при преобразовании данных:", err.Error())
+		client.ErrorLog.Println("Error while converting data:", err.Error())
 		client.Stop(false, 1)
 	}
 	for {
-		client.InfoLog.Println("Пробую отправить запрос о состоянии на сервер")
+		client.InfoLog.Println("Trying to send an alarm status request to the server")
 		client.sendToServer(request)
 	}
 }
@@ -253,11 +353,11 @@ func (client *Client) RunAlarmer(IsAlarmButtonPressed bool) {
 	client.IsAlarmButtonPressed = IsAlarmButtonPressed
 	request, err := NewAlarmRequest(client).Serialize()
 	if err != nil {
-		client.ErrorLog.Println("Ошибка при преобразовании данных:", err.Error())
+		client.ErrorLog.Println("Error while converting data:", err.Error())
 		client.Stop(false, 1)
 	}
 	for {
-		client.InfoLog.Println("Пробую отправить запрос о тревоге на сервер")
+		client.InfoLog.Println("Trying to send an alarm request to the server")
 		client.sendToServer(request)
 	}
 }
@@ -270,7 +370,7 @@ func (client *Client) Stop(IsPowerOffRequired bool, params ...int) {
 
 	if IsPowerOffRequired {
 		if err := client.shutdownPC(); err != nil {
-			client.ErrorLog.Println("Ошибка при выключении компьютера:", err.Error())
+			client.ErrorLog.Println("Error during shutdown:", err.Error())
 			exitCode = 1
 		}
 	}
@@ -284,25 +384,25 @@ func (client *Client) processAlarmButtonState() {
 }
 
 func (client *Client) shutdownPC() error {
-	client.InfoLog.Println("Выключаем ПК")
+	client.InfoLog.Println("Turning off the PC")
 	if client.debugMode {
 		return nil
 	} else {
 		osLC := strings.ToLower(client.OperatingSystem)
 		if strings.Contains(osLC, "linux") || strings.Contains(osLC, "darwin") {
-			return exec.Command("shutdown", "-h", "now").Run()
+			return exec.Command("shutdown", "-h", "now").Start()
 		} else if strings.Contains(osLC, "windows") {
-			return exec.Command("shutdown.exe", "-s", "-f", "-t", "0").Run()
+			return exec.Command("shutdown.exe", "-s", "-f", "-t", "0").Start()
 		} else {
-			return errors.New("ОС " + client.OperatingSystem + " не поддерживается.")
+			return fmt.Errorf("%s OS is not supported", client.OperatingSystem)
 		}
 	}
 }
 
 func (client *Client) sendToServer(request []byte) {
-	connection, err := net.Dial("tcp", client.ServerSocket)
+	connection, err := net.Dial("tcp", Settings.ServerSocket)
 	if err != nil {
-		client.ErrorLog.Println("Не удалось подключиться к серверу:", err.Error())
+		client.ErrorLog.Println("Failed to read server response:", err.Error())
 	} else {
 		connection.Write(request)
 		client.decodeServerResponse(connection)
@@ -315,23 +415,23 @@ func (client *Client) decodeServerResponse(connection net.Conn) {
 	byteBuf := make([]byte, clientBufferSize)
 	bytesRead, err := connection.Read(byteBuf)
 	if err != nil {
-		client.ErrorLog.Println("Не удалось прочитать ответ сервера:", err.Error())
+		client.ErrorLog.Println("Failed to read server response:", err.Error())
 	} else {
 		message := &Message{}
 		if err := json.Unmarshal(byteBuf[:bytesRead], &message); err != nil {
-			client.ErrorLog.Println("Ошибка при парсинге сообщения:", err.Error())
+			client.ErrorLog.Println("Error while parsing the message:", err.Error())
 		}
 		switch message.Type {
 		case "AlarmResponse":
 			alarmResponse := AlarmResponse{}
 			if err := json.Unmarshal(*message.Data, &alarmResponse); err != nil {
-				client.ErrorLog.Println("Ошибка при парсинге сообщения:", err.Error())
+				client.ErrorLog.Println("Error while parsing the message:", err.Error())
 			}
 			client.processServerResponse(alarmResponse)
 		case "StateResponse":
 			stateResponse := StateResponse{}
 			if err := json.Unmarshal(*message.Data, &stateResponse); err != nil {
-				client.ErrorLog.Println("Ошибка при парсинге сообщения:", err.Error())
+				client.ErrorLog.Println("Error while parsing the message:", err.Error())
 			}
 			client.processServerResponse(stateResponse)
 		default:
@@ -344,15 +444,15 @@ func (client *Client) processServerResponse(response interface{}) {
 	switch response.(type) {
 	case AlarmResponse:
 		alarmResponse := response.(AlarmResponse)
-		client.InfoLog.Println("Получен ответ на разовую тревогу:", alarmResponse.String())
+		client.InfoLog.Println("Alarm response received:", alarmResponse.String())
 		client.Stop(false)
 	case StateResponse:
 		stateResponse := response.(StateResponse)
-		client.InfoLog.Println("Получен ответ на проверку состояния:", stateResponse.String())
+		client.InfoLog.Println("Status check response received:", stateResponse.String())
 		client.IsAlarmButtonPressed = stateResponse.IsAlarmButtonPressed
 		client.processAlarmButtonState()
 	default:
-		client.InfoLog.Println("Получена другая информация:", response)
+		client.InfoLog.Println("Other information received:", response)
 	}
 }
 
@@ -375,11 +475,75 @@ func GetFileChecksum(fileName string) ([]byte, error) {
 		return nil, err
 	}
 	if !DefaultChecksumFunction.Available() {
-		return nil, errors.New("хеш-функция не доступна, подсчет контрольной суммы невозможен")
+		return nil, errors.New("hash function is not available, checksum calculation is not possible")
 	}
 	hasher := DefaultChecksumFunction.New()
 	hasher.Write(contents)
 	newFileChecksum := hasher.Sum(nil)
 
 	return newFileChecksum[:], nil
+}
+
+func IsUpdaterRunningNow(infoLog *log.Logger, errorLog *log.Logger) bool {
+	if infoLog != nil {
+		infoLog.Println("Checking for the presence of an update marker")
+	}
+	funcResult := true
+	fileInfo, err := os.Stat(UpdateMarkerFileName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if infoLog != nil {
+				infoLog.Println("Update marker not found")
+			}
+			funcResult = false
+		} else {
+			if time.Since(fileInfo.ModTime()) > UpdateMarkerLifeTime {
+				if infoLog != nil {
+					infoLog.Println("The update marker is too old, perhaps the update is stuck. Trying to delete the file")
+				}
+				err = TerminateProcessByName(UpdaterExecutable)
+				funcResult = (err != nil)
+				if err == nil {
+					err = os.Remove(UpdateMarkerFileName)
+					funcResult = (err != nil)
+				}
+			}
+		}
+	}
+	return funcResult
+}
+
+func TerminateProcessByName(processNameToTerminate string) error {
+	processList, err := ps.Processes()
+	if err != nil {
+		return err
+	}
+	thisProcessID := os.Getpid()
+	for processIndex := range processList {
+		process := processList[processIndex]
+		processID := process.Pid()
+		if processID == thisProcessID {
+			continue
+		}
+		processName := process.Executable()
+		if processName == processNameToTerminate {
+			runningProcess, err := os.FindProcess(processID)
+			if err != nil {
+				return err
+			}
+			err = runningProcess.Kill()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func SliceToStringMap(elements []string) map[string]bool {
+	funcResult := make(map[string]bool, len(elements))
+	for _, value := range elements {
+		funcResult[value] = true
+	}
+	return funcResult
 }
