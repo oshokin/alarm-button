@@ -159,7 +159,7 @@ func (updater *Updater) Run() {
 }
 
 func (updater *Updater) terminateAlarmButtonProcesses() error {
-	executableFiles := entities.SliceToStringMap(entities.AllExecutableFiles)
+	executableFiles := entities.SliceToStringMap(entities.FilesWithChecksum)
 	processList, err := ps.Processes()
 	if err != nil {
 		return err
@@ -303,7 +303,7 @@ func (updater *Updater) updateFiles() error {
 		if err != nil {
 			return err
 		}
-		updater.InfoLog.Printf("Looking for a checksum")
+		updater.InfoLog.Println("Looking for a checksum")
 		downloadedFileBase64, isChecksumFound := updater.UpdateDescription.Files[fileName]
 		if !isChecksumFound {
 			return fmt.Errorf("the checksum of the %s file is not set", downloadedFileName)
@@ -318,7 +318,7 @@ func (updater *Updater) updateFiles() error {
 				return err
 			}
 		}
-		updater.InfoLog.Printf("Applying update")
+		updater.InfoLog.Println("Applying update")
 		options := &update.Options{
 			TargetPath: fileName,
 			TargetMode: entities.DefaultFileMode,

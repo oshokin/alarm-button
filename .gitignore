@@ -20,3 +20,4 @@ alarm-server/*.yaml
 alarm-updater/*.exe
 alarm-updater/*.log
 alarm-updater/*.yaml
+build.bat

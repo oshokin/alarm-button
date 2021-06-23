@@ -51,7 +51,7 @@ var (
 		"client": CheckerExecutable,
 		"server": ServerExecutable,
 	}
-	AllExecutableFiles = []string{"alarm-button-off.exe", "alarm-button-on.exe", CheckerExecutable, ServerExecutable, UpdaterExecutable}
+	FilesWithChecksum = []string{"alarm-button-off.exe", "alarm-button-on.exe", CheckerExecutable, ServerExecutable, UpdaterExecutable, SettingsFileName}
 )
 
 type CommonSettings struct {
@@ -494,7 +494,7 @@ func IsUpdaterRunningNow(infoLog *log.Logger, errorLog *log.Logger) bool {
 	if err != nil {
 		if os.IsNotExist(err) {
 			if infoLog != nil {
-				infoLog.Println("Update marker not found")
+				infoLog.Println("Update marker not found, trying to proceed further")
 			}
 			funcResult = false
 		} else {
