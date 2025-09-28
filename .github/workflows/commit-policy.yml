@@ -2,7 +2,7 @@
 # This workflow validates that all commit messages follow the required format.
 # Works in conjunction with the local Git hook for comprehensive validation.
 
-name: commit-policy
+name: Commit Policy
 
 # Trigger on all pull requests and pushes to any branch.
 # This ensures commit message validation across all development activity.

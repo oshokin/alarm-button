@@ -2,7 +2,7 @@
 # This workflow analyzes commit messages to determine version bumps and creates releases.
 # Integrates with GoReleaser to build and publish cross-platform binaries.
 
-name: release
+name: Release
 
 # Trigger on pushes to master branch and allow manual triggering.
 # Only master branch pushes should trigger releases in production.
@@ -67,7 +67,7 @@ jobs:
         if: steps.bump.outputs.has_release == '1'
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest     # Use latest GoReleaser version for newest features.
+          version: v2.12.3    # Pin to specific version to avoid warnings.
           args: release --clean  # Clean previous builds and create release.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Token for GitHub API access.
