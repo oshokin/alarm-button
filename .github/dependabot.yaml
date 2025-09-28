@@ -1,0 +1,33 @@
+# Dependabot configuration for automated dependency updates.
+# This file configures GitHub's Dependabot to automatically check for and create
+# pull requests for outdated dependencies in both GitHub Actions and Go modules.
+
+version: 2  # Use Dependabot configuration file format version 2.
+
+updates:
+  # GitHub Actions dependency updates configuration.
+  # Monitors workflow files for outdated action versions and creates update PRs.
+  - package-ecosystem: "github-actions"  # Target GitHub Actions in workflow files.
+    directory: "/"                       # Scan entire repository for workflow files.
+    schedule:
+      interval: "weekly"                 # Check for updates every week.
+      day: "monday"                      # Run checks on Monday mornings.
+    assignees:
+      - "oshokin"                        # Assign update PRs to repository owner.
+    labels:
+      - "github-actions dependencies"    # Label PRs for easy identification.
+    open-pull-requests-limit: 1          # Limit to 1 open PR to avoid spam.
+
+  # Go module dependency updates configuration.
+  # Monitors go.mod and go.sum files for outdated Go dependencies.
+  - package-ecosystem: "gomod"           # Target Go modules (go.mod/go.sum files).
+    directory: "/"                       # Scan repository root for Go module files.
+    schedule:
+      interval: "weekly"                 # Check for updates every week.
+      day: "monday"                      # Run checks on Monday mornings.
+    assignees:
+      - "oshokin"                        # Assign update PRs to repository owner.
+    labels:
+      - "go dependencies"                # Label PRs for easy identification.
+    open-pull-requests-limit: 1          # Limit to 1 open PR to avoid spam.
+

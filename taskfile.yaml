@@ -1,0 +1,388 @@
+version: "3"
+
+# Suppress task output unless there are errors.
+silent: true
+
+vars:
+  # -------------------------------
+  # Platform Configuration
+  # -------------------------------
+
+  # Path separator for the current operating system.
+  PS: '{{fromSlash "/"}}'
+
+  # Cross-platform commands because PowerShell STILL doesn't ship with proper Unix tools in 2025.
+  # (Yes, this is ridiculous. No, Microsoft hasn't fixed it yet.)
+
+  # Command to recursively remove files and directories.
+  RMRF: '{{if eq OS "windows"}}powershell Remove-Item -Force -Recurse -ErrorAction SilentlyContinue{{else}}rm -rf{{end}}'
+
+  # Command to create directories.
+  MKDIR: '{{if eq OS "windows"}}powershell New-Item -ItemType Directory -Force{{else}}mkdir -p{{end}}'
+
+  # Command to move files.
+  MV: '{{if eq OS "windows"}}powershell Move-Item -Force{{else}}mv{{end}}'
+
+  # -------------------------------
+  # Project Directories
+  # -------------------------------
+
+  # Directory for locally installed binaries.
+  LOCAL_BIN: "{{.TASKFILE_DIR}}{{.PS}}bin"
+  CMD_DIR: "{{.TASKFILE_DIR}}{{.PS}}cmd"
+
+  # -------------------------------
+  # Protobuf Toolchain Configuration
+  # -------------------------------
+
+  # Protocol Buffers compiler version (must be explicit version - protoc doesn't support 'latest' tag).
+  PROTOC_VERSION: "32.1"
+  # Release tag for Protocol Buffers compiler downloads.
+  PROTOC_DOWNLOAD_TAG: "v{{.PROTOC_VERSION}}"
+
+  # These can use 'latest' since they're installed via go install.
+  # Protobuf Go generator version.
+  PROTOC_GEN_GO_TAG: "latest"
+  # gRPC Go generator version.
+  PROTOC_GEN_GO_GRPC_TAG: "latest"
+
+  # Platform-specific protoc zip filename.
+  PROTOC_ZIP: 'protoc-{{.PROTOC_VERSION}}-{{if eq OS "windows"}}win64{{else if eq OS "darwin"}}osx-x86_64{{else}}linux-x86_64{{end}}.zip'
+  # Full path to download protoc zip (different locations for Windows vs Unix).
+  PROTOC_ZIP_FULL_PATH: '{{if eq OS "windows"}}{{.LOCAL_BIN}}{{.PS}}{{.PROTOC_ZIP}}{{else}}{{.PS}}tmp{{.PS}}{{.PROTOC_ZIP}}{{end}}'
+  # URL to download protoc from GitHub releases.
+  PROTOC_URL: "https://github.com/protocolbuffers/protobuf/releases/download/{{.PROTOC_DOWNLOAD_TAG}}/{{.PROTOC_ZIP}}"
+
+  # Binary names and paths.
+  PROTOC_BIN_BASE: "protoc{{exeExt}}"
+  PROTOC_BIN: "{{.LOCAL_BIN}}{{.PS}}{{.PROTOC_BIN_BASE}}"
+  # Temporary path where protoc binary is initially extracted.
+  PROTOC_BIN_IN_ZIP: "{{.LOCAL_BIN}}{{.PS}}bin{{.PS}}{{.PROTOC_BIN_BASE}}"
+  PROTOC_GEN_GO_BIN: "{{.LOCAL_BIN}}{{.PS}}protoc-gen-go{{exeExt}}"
+  PROTOC_GEN_GO_GRPC_BIN: "{{.LOCAL_BIN}}{{.PS}}protoc-gen-go-grpc{{exeExt}}"
+
+  # -------------------------------
+  # Code Quality Tools
+  # -------------------------------
+
+  # Go imports tool (version can be 'latest' since installed via go install).
+  GOIMPORTS_TAG: "latest"
+  GOIMPORTS_BIN: "{{.LOCAL_BIN}}{{.PS}}goimports{{exeExt}}"
+
+  # Linting tool configuration.
+  GOLANGCI_TAG: "latest"
+  GOLANGCI_BIN: "{{.LOCAL_BIN}}{{.PS}}golangci-lint{{exeExt}}"
+
+  # Linter configuration files.
+  GOLANGCI_CONFIG: ".golangci.yaml"
+
+  # -------------------------------
+  # Version Detection
+  # -------------------------------
+
+  # Commands to check current versions of installed tools.
+  PROTOC_VERSION_OUTPUT:
+    sh: '"{{.PROTOC_BIN}}" --version 2> /dev/null || true'
+  PROTOC_GEN_GO_VERSION_OUTPUT:
+    sh: '"{{.PROTOC_GEN_GO_BIN}}" --version 2> /dev/null || true'
+  PROTOC_GEN_GO_GRPC_VERSION_OUTPUT:
+    sh: '"{{.PROTOC_GEN_GO_GRPC_BIN}}" --version 2> /dev/null || true'
+  GOIMPORTS_VERSION_OUTPUT:
+    sh: 'go version -m "{{.GOIMPORTS_BIN}}" 2> /dev/null || true'
+  GOLANGCI_VERSION_OUTPUT:
+    sh: '"{{.GOLANGCI_BIN}}" version 2> /dev/null || true'
+
+  # Regex patterns to extract version numbers from tool outputs.
+  PROTOC_CURRENT_TAG: '{{regexFind "[0-9]+.[0-9]+" .PROTOC_VERSION_OUTPUT}}'
+  PROTOC_GEN_GO_CURRENT_TAG: '{{regexFind "v([0-9]+.){2}([0-9a-z])+" .PROTOC_GEN_GO_VERSION_OUTPUT}}'
+  PROTOC_GEN_GO_GRPC_CURRENT_TAG: 'v{{regexFind "([0-9]+.){2}([0-9a-z])+" .PROTOC_GEN_GO_GRPC_VERSION_OUTPUT}}'
+  GOLANGCI_CURRENT_TAG: '{{regexFind "v([0-9]+.){2}([0-9a-z])+" (regexFind "version v([0-9]+.){2}([0-9a-z])+ " .GOLANGCI_VERSION_OUTPUT)}}'
+  GOIMPORTS_CURRENT_TAG: '{{regexFind "v([0-9]+.){2}([0-9a-z])+" (regexFind "golang.org/x/tools\tv([0-9]+.){2}([0-9a-z])+\t" .GOIMPORTS_VERSION_OUTPUT)}}'
+
+  # -------------------------------
+  # Project Binaries
+  # -------------------------------
+
+  # List of binaries to build.
+  BINARIES:
+    - "alarm-button-off"
+    - "alarm-button-on"
+    - "alarm-checker"
+    - "alarm-packager"
+    - "alarm-server"
+    - "alarm-updater"
+
+  # -------------------------------
+  # Version Detection and Injection
+  # -------------------------------
+
+  # Detect the latest semantic version tag (v1.2.3 format only).
+  # If no proper semver tag exists, this will be empty and no version injection occurs.
+  LATEST_SEMVER_TAG:
+    sh: 'git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 2>/dev/null || echo ""'
+  
+  # Current Git commit hash for build metadata.
+  GIT_COMMIT:
+    sh: 'git rev-parse --short HEAD 2>/dev/null || echo "dev"'
+  
+  # Build timestamp in UTC ISO format.
+  BUILD_TIME:
+    sh: '{{if eq OS "windows"}}powershell -Command "Get-Date -UFormat \"%Y-%m-%dT%H:%M:%SZ\""{{else}}date -u +"%Y-%m-%dT%H:%M:%SZ"{{end}}'
+  
+  # Clean version string (strip 'v' prefix) for injection.
+  CLEAN_VERSION:
+    sh: |
+      if [[ -n "{{.LATEST_SEMVER_TAG}}" ]]; then
+        echo "{{.LATEST_SEMVER_TAG}}" | sed 's/^v//'
+      else
+        echo ""
+      fi
+  
+  # Build flags for version injection (only set if semantic tag exists).
+  VERSION_LDFLAGS:
+    sh: |
+      if [[ -n "{{.LATEST_SEMVER_TAG}}" ]]; then
+        echo "-s -w -X github.com/oshokin/alarm-button/internal/version.Version={{.CLEAN_VERSION}} -X github.com/oshokin/alarm-button/internal/version.Commit={{.GIT_COMMIT}} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{.BUILD_TIME}}"
+      else
+        echo ""
+      fi
+
+tasks:
+  # -------------------------------
+  # Default Task
+  # -------------------------------
+
+  default:
+    cmds:
+      - task -l
+
+  # -------------------------------
+  # Installation Tasks
+  # -------------------------------
+
+  install:all:
+    desc: "Bootstrap development environment"
+    cmds:
+      - task: install:protoc
+      - task: install:protoc-gen-go
+      - task: install:protoc-gen-go-grpc
+      - task: install:lint
+      - task: install:githooks
+
+  install:protoc:
+    desc: "Install protoc compiler"
+    cmds:
+      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
+      - |
+        # Only install if current version doesn't match desired version.
+        {{if (not (eq .PROTOC_CURRENT_TAG .PROTOC_VERSION))}}
+          echo "Installing protoc, version: {{.PROTOC_VERSION}}..."
+          {{if eq OS "windows"}}
+            # Windows-specific download and extraction.
+            curl -fSL -o "{{.PROTOC_ZIP_FULL_PATH}}" "{{.PROTOC_URL}}"
+            powershell Expand-Archive -Path "{{.PROTOC_ZIP_FULL_PATH}}" -DestinationPath "{{.LOCAL_BIN}}" -Force
+          {{else}}
+            # Unix/Mac download and extraction.
+            curl -fSL -o {{.PROTOC_ZIP_FULL_PATH}} "{{.PROTOC_URL}}"
+            unzip -o {{.PROTOC_ZIP_FULL_PATH}} -d "{{.LOCAL_BIN}}"
+            chmod +x "{{.PROTOC_BIN_IN_ZIP}}"
+          {{end}}
+          # Cleanup temporary files.
+          {{.RMRF}} "{{.PROTOC_ZIP_FULL_PATH}}"
+          # Move binary to final location.
+          {{.MV}} "{{.PROTOC_BIN_IN_ZIP}}" "{{.PROTOC_BIN}}"
+          # Remove unnecessary extracted files.
+          {{.RMRF}} "{{.LOCAL_BIN}}{{.PS}}bin"
+          {{.RMRF}} "{{.LOCAL_BIN}}{{.PS}}readme.txt"
+        {{end}}
+    env:
+      GOBIN: "{{.LOCAL_BIN}}"
+
+  install:protoc-gen-go:
+    desc: "Install protoc-gen-go plugin"
+    cmds:
+      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
+      - |
+        {{if (not (eq .PROTOC_GEN_GO_CURRENT_TAG .PROTOC_GEN_GO_TAG))}}
+          echo "Installing protoc-gen-go, version: {{.PROTOC_GEN_GO_TAG}}..."
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_TAG}}
+        {{end}}
+    env:
+      GOBIN: "{{.LOCAL_BIN}}"
+
+  install:protoc-gen-go-grpc:
+    desc: "Install protoc-gen-go-grpc plugin"
+    cmds:
+      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
+      - |
+        {{if (not (eq .PROTOC_GEN_GO_GRPC_CURRENT_TAG .PROTOC_GEN_GO_GRPC_TAG))}}
+          echo "Installing protoc-gen-go-grpc, version: {{.PROTOC_GEN_GO_GRPC_TAG}}..."
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_TAG}}
+        {{end}}
+    env:
+      GOBIN: "{{.LOCAL_BIN}}"
+
+  install:goimports:
+    desc: "Install goimports tool"
+    cmds:
+      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
+      - |
+        {{if (not (eq .GOIMPORTS_CURRENT_TAG .GOIMPORTS_TAG))}}
+          echo "Installing goimports, version: {{.GOIMPORTS_TAG}}..."
+          go install golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_TAG}}
+        {{end}}
+    env:
+      GOBIN: "{{.LOCAL_BIN}}"
+
+  install:lint:
+    desc: "Install golangci-lint"
+    cmds:
+      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
+      - |
+        {{if (not (eq .GOLANGCI_CURRENT_TAG .GOLANGCI_TAG))}}
+          echo "Installing golangci-lint, version: {{.GOLANGCI_TAG}}..."
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_TAG}}
+        {{end}}
+    env:
+      GOBIN: "{{.LOCAL_BIN}}"
+
+  install:githooks:
+    desc: "Configure Git hooks for this repository"
+    cmds:
+      - |
+        echo "Setting up Git hooks..."
+        git config --local core.hooksPath .githooks
+        chmod +x .githooks/commit-msg
+        echo "Git hooks configured successfully!"
+        echo "Commit messages must now start with: fix:, feat:, or major:"
+
+  remove:githooks:
+    desc: "Disable Git hooks for this repository"
+    cmds:
+      - |
+        echo "Disabling Git hooks..."
+        git config --local --unset core.hooksPath || echo "Hooks path was not set"
+        chmod -x .githooks/commit-msg 2>/dev/null || echo "Hook file not found"
+        echo "Git hooks disabled. You can now use any commit message format."
+
+  # -------------------------------
+  # Code Generation & Formatting
+  # -------------------------------
+
+  format:
+    desc: "Format Go code using goimports"
+    deps: [install:goimports]
+    cmds:
+      - '"{{.GOIMPORTS_BIN}}" -w ./'
+
+  generate:
+    desc: "Generate protobuf code and format"
+    deps:
+      - install:protoc
+      - install:protoc-gen-go
+      - install:protoc-gen-go-grpc
+      - install:goimports
+    cmds:
+      - "{{.MKDIR}} internal/pb"
+      - 'PATH="{{.LOCAL_BIN}}:$PATH" "{{.PROTOC_BIN}}"
+        --go_out=internal/pb
+        --go_opt=paths=source_relative
+        --go-grpc_out=internal/pb
+        --go-grpc_opt=paths=source_relative
+        --proto_path={{.LOCAL_BIN}}{{.PS}}include
+        --proto_path=api
+        api/v1/*.proto'
+      - go mod tidy # Required to pull dependencies after code generation.
+      - task: format
+
+  # -------------------------------
+  # Code Quality Checks
+  # -------------------------------
+
+  lint:
+    desc: "Run standard golangci-lint checks on changed files"
+    deps: [install:lint]
+    cmds:
+      - '"{{.GOLANGCI_BIN}}" run --new-from-rev=origin/master --config={{.GOLANGCI_CONFIG}}'
+
+  lint:fix:
+    desc: "Run standard golangci-lint checks on changed files and auto-fix"
+    deps: [install:lint]
+    cmds:
+      - '"{{.GOLANGCI_BIN}}" run --new-from-rev=origin/master --config={{.GOLANGCI_CONFIG}} --fix'
+
+  lint:full:
+    desc: "Run standard golangci-lint checks on all files"
+    deps: [install:lint]
+    cmds:
+      - '"{{.GOLANGCI_BIN}}" run --config={{.GOLANGCI_CONFIG}}'
+
+  lint:full:fix:
+    desc: "Run standard golangci-lint checks on all files and auto-fix"
+    deps: [install:lint]
+    cmds:
+      - '"{{.GOLANGCI_BIN}}" run --config={{.GOLANGCI_CONFIG}} --fix'
+
+  # -------------------------------
+  # Testing
+  # -------------------------------
+
+  test:
+    desc: "Run all tests with verbose output"
+    cmds:
+      - go test -v ./...
+
+  test:race:
+    desc: "Run tests with race detector enabled"
+    cmds:
+      - '{{if eq OS "windows"}}echo "Ensure gcc is installed or use WSL for a smoother experience"{{end}}'
+      - go test -race -v ./...
+    env:
+      CGO_ENABLED: "1"
+
+  # -------------------------------
+  # Build & Cleanup
+  # -------------------------------
+
+  build:
+    desc: "Build all project binaries"
+    cmds:
+      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
+      - |
+        # Display build information based on version detection.
+        {{if .LATEST_SEMVER_TAG}}
+          echo "Found semantic version tag: {{.LATEST_SEMVER_TAG}}"
+          echo "Building release version {{.CLEAN_VERSION}} with metadata injection..."
+        {{else}}
+          echo "No semantic version tags found (v*.*.* format)"
+          echo "Building development version without injection..."
+        {{end}}
+        echo ""
+        
+        # Build each binary with conditional version injection.
+        {{range .BINARIES}}
+          {{if $.LATEST_SEMVER_TAG}}
+            echo "Building {{.}} (v{{$.CLEAN_VERSION}})..."
+            cd "{{$.CMD_DIR}}{{$.PS}}{{.}}" && go build -ldflags "{{$.VERSION_LDFLAGS}}" -o "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}" && cd {{$.TASKFILE_DIR}}
+          {{else}}
+            echo "Building {{.}} (development)..."
+            cd "{{$.CMD_DIR}}{{$.PS}}{{.}}" && go build -o "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}" && cd {{$.TASKFILE_DIR}}
+          {{end}}
+        {{end}}
+        
+        echo ""
+        echo "Build completed successfully!"
+        {{if .LATEST_SEMVER_TAG}}
+          echo "Version info: {{.CLEAN_VERSION}} (commit: {{.GIT_COMMIT}}, built: {{.BUILD_TIME}})"
+        {{else}}
+          echo "Tip: Create a semantic version tag (e.g., 'git tag v1.0.0') to enable version injection"
+        {{end}}
+
+  clean:
+    desc: "Remove all built binaries"
+    cmds:
+      - |
+        {{range .BINARIES}}
+          echo "Removing {{.}}..."
+          {{$.RMRF}} "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}"
+        {{end}}

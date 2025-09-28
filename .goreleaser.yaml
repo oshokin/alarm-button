@@ -1,0 +1,108 @@
+# GoReleaser configuration for the alarm-button project.
+# This file defines how to build, package, and release the emergency shutdown system.
+version: 2
+
+# Name of the project used in release artifacts and archives.
+project_name: alarm-button
+
+# Pre-build hooks to ensure clean dependencies before building.
+before:
+  hooks:
+    # Clean up and download missing Go module dependencies.
+    - go mod tidy
+
+# Build configuration for all project executables.
+# Each binary is built for multiple platforms (Windows, Linux, macOS) and architectures.
+builds:
+  # Client executable to reset alarm state (tiger safely captured).
+  - id: alarm-button-off
+    main: ./cmd/alarm-button-off
+    binary: alarm-button-off
+    goos: [linux, darwin, windows]  # Target operating systems.
+    goarch: [amd64, arm64]          # Target architectures.
+    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    ldflags:
+      # Strip debug info (-s -w) and inject version metadata at build time.
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+  # Client executable to trigger emergency alarm (tiger detected!).
+  - id: alarm-button-on
+    main: ./cmd/alarm-button-on
+    binary: alarm-button-on
+    goos: [linux, darwin, windows]  # Target operating systems.
+    goarch: [amd64, arm64]          # Target architectures.
+    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    ldflags:
+      # Strip debug info (-s -w) and inject version metadata at build time.
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+  
+  # Client daemon that monitors alarm state and initiates shutdown when activated.
+  - id: alarm-checker
+    main: ./cmd/alarm-checker
+    binary: alarm-checker
+    goos: [linux, darwin, windows]  # Target operating systems.
+    goarch: [amd64, arm64]          # Target architectures.
+    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    ldflags:
+      # Strip debug info (-s -w) and inject version metadata at build time.
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+  
+  # Server utility to prepare and distribute software updates.
+  - id: alarm-packager
+    main: ./cmd/alarm-packager
+    binary: alarm-packager
+    goos: [linux, darwin, windows]  # Target operating systems.
+    goarch: [amd64, arm64]          # Target architectures.
+    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    ldflags:
+      # Strip debug info (-s -w) and inject version metadata at build time.
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+  
+  # Central gRPC server that manages the distributed alarm state.
+  - id: alarm-server
+    main: ./cmd/alarm-server
+    binary: alarm-server
+    goos: [linux, darwin, windows]  # Target operating systems.
+    goarch: [amd64, arm64]          # Target architectures.
+    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    ldflags:
+      # Strip debug info (-s -w) and inject version metadata at build time.
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+  
+  # Client utility to download and apply software updates automatically.
+  - id: alarm-updater
+    main: ./cmd/alarm-updater
+    binary: alarm-updater
+    goos: [linux, darwin, windows]  # Target operating systems.
+    goarch: [amd64, arm64]          # Target architectures.
+    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    ldflags:
+      # Strip debug info (-s -w) and inject version metadata at build time.
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+
+# Archive configuration for distributing the built binaries.
+archives:
+  - id: archives
+    formats: [tar.gz]                   # Default archive format for Unix systems.
+    format_overrides:
+      - goos: windows
+        formats: [zip]                  # Use ZIP format for Windows compatibility.
+    wrap_in_directory: false            # Place files directly in archive root.
+    files:
+      - README.md                       # Include documentation in releases.
+
+# Changelog generation settings for release notes.
+changelog:
+  use: git                              # Generate changelog from Git commit history.
+  sort: asc                             # Sort commits in ascending chronological order.
+  filters:
+    include:
+      - '^major:'                       # Include major version changes.
+      - '^feat:'                        # Include new features.
+      - '^fix:'                         # Include bug fixes.
+
+# GitHub release configuration for publishing artifacts.
+release:
+  github:
+    owner: oshokin                      # GitHub repository owner.
+    name: alarm-button                  # GitHub repository name.
+

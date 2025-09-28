@@ -1,0 +1,66 @@
+# GitHub Actions workflow to enforce semantic commit message policy.
+# This workflow validates that all commit messages follow the required format.
+# Works in conjunction with the local Git hook for comprehensive validation.
+
+name: commit-policy
+
+# Trigger on all pull requests and pushes to any branch.
+# This ensures commit message validation across all development activity.
+on:
+  pull_request:  # Validate PR commits before they reach master.
+  push:          # Validate direct pushes to any branch.
+
+jobs:
+  validate-commit-messages:
+    runs-on: ubuntu-latest  # Use Ubuntu for consistent bash behavior.
+    steps:
+      # Check out repository with full Git history for commit analysis.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to access commit ranges.
+
+      # Determine the range of commits to validate based on event type.
+      # Different logic for PRs vs direct pushes to handle Git refs correctly.
+      - name: Determine range
+        id: range
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # For PRs: check commits between base branch and PR head.
+            echo "range=${{ github.event.pull_request.base.sha }}..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            # For push events: use GitHub-provided before..after range.
+            echo "range=${{ github.event.before }}..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Validate that all commits in the range follow semantic commit format.
+      # Enforces the same rules as the local Git hook: fix:, feat:, major:.
+      - name: Check commit messages
+        run: |
+          set -euo pipefail  # Exit on error, undefined variables, pipe failures.
+          range='${{ steps.range.outputs.range }}'
+          echo "Checking commits in range: $range"
+          
+          # Define the required commit message pattern (matches Git hook).
+          pattern='^(fix|feat|major): '
+          
+          # Extract commit subjects from the specified range.
+          msgs=$(git log --format=%s "$range")
+          
+          # Handle edge case where no commits exist in range.
+          if [[ -z "$msgs" ]]; then
+            echo "No commits to check (range may be empty)."; exit 0
+          fi
+          
+          # Find commits that don't match the required pattern.
+          bad=$(printf '%s\n' "$msgs" | grep -Ev "$pattern" || true)
+          
+          # Fail the workflow if any non-conforming commits are found.
+          if [[ -n "$bad" ]]; then
+            echo 'The following commit subjects violate the policy:'
+            echo "$bad"
+            echo
+            echo "Allowed prefixes: 'fix: ', 'feat: ', 'major: '"
+            exit 1
+          fi
+          
+          echo "All commit messages conform to policy."

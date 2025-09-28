@@ -1,0 +1,73 @@
+# GitHub Actions workflow for automated semantic versioning and releases.
+# This workflow analyzes commit messages to determine version bumps and creates releases.
+# Integrates with GoReleaser to build and publish cross-platform binaries.
+
+name: release
+
+# Trigger on pushes to master branch and allow manual triggering.
+# Only master branch pushes should trigger releases in production.
+on:
+  push:
+    branches: [ master ]  # Automated releases on master branch pushes.
+  workflow_dispatch: {}   # Allow manual release triggering when needed.
+
+# Grant write permissions to create releases and push tags.
+permissions:
+  contents: write  # Required to create releases and push Git tags.
+
+jobs:
+  release:
+    runs-on: ubuntu-latest  # Use Ubuntu for consistent tooling environment.
+    steps:
+      # Check out repository with full Git history for version analysis.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all tags and history for semantic versioning.
+
+      # Set up Go environment for building release binaries.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'  # Use latest stable Go version.
+
+      # Analyze commit messages since last tag to determine version bump.
+      # Uses the semver_next.sh script to implement semantic versioning logic.
+      - name: Compute next version
+        id: bump
+        run: |
+          bash scripts/semver_next.sh --emit-gh-output
+
+      # Skip release if no semantic commits (fix/feat/major) found.
+      # This prevents unnecessary releases for documentation or other changes.
+      - name: Skip if no release-worthy commits
+        if: steps.bump.outputs.has_release != '1'
+        run: |
+          echo "No fix/feat/major commits since last tag — skipping release."
+
+      # Configure Git user for automated tag creation.
+      # Uses GitHub Actions bot identity for audit trail.
+      - name: Configure git
+        if: steps.bump.outputs.has_release == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Create and push the new version tag to trigger GoReleaser.
+      # Tag creation must happen before GoReleaser runs.
+      - name: Create and push tag
+        if: steps.bump.outputs.has_release == '1'
+        run: |
+          git tag "${{ steps.bump.outputs.next_tag }}"
+          git push origin "${{ steps.bump.outputs.next_tag }}"
+
+      # Run GoReleaser to build binaries and create GitHub release.
+      # Only executes if semantic commits were found requiring a release.
+      - name: GoReleaser
+        if: steps.bump.outputs.has_release == '1'
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest     # Use latest GoReleaser version for newest features.
+          args: release --clean  # Clean previous builds and create release.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Token for GitHub API access.

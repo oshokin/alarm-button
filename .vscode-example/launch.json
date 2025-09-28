@@ -1,0 +1,130 @@
+{
+    // VSCode launch configuration for debugging the alarm-button emergency shutdown system.
+    // This file provides debug configurations for all executables and common use cases.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // Debug the central gRPC alarm server with default settings.
+            "name": "debug: alarm-server (default port)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-server",
+            "args": [":8080"]
+        },
+        {
+            // Debug the alarm server with custom configuration file.
+            "name": "debug: alarm-server (with config)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-server",
+            "args": ["--config", "debug-config.yaml", ":8080"]
+        },
+        {
+            // Debug the update packager for preparing releases.
+            "name": "debug: alarm-packager",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-packager",
+            "args": ["localhost:8080", "/tmp/updates"]
+        },
+        {
+            // Debug the alarm reset button (security personnel use).
+            "name": "debug: alarm-button-off",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-button-off",
+            "args": ["localhost:8080"]
+        },
+        {
+            // Debug the emergency alarm trigger (tiger detected!).
+            "name": "debug: alarm-button-on (no shutdown)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug", 
+            "program": "${workspaceFolder}/cmd/alarm-button-on",
+            "args": ["--debug", "localhost:8080"]
+        },
+        {
+            // Debug the alarm monitor daemon (monitors for tiger alarms).
+            "name": "debug: alarm-checker (no shutdown)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-checker", 
+            "args": ["--debug", "localhost:8080"]
+        },
+        {
+            // Debug the client updater for workstation updates.
+            "name": "debug: alarm-updater (client mode)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-updater",
+            "args": ["client"]
+        },
+        {
+            // Debug the server updater for control room updates.
+            "name": "debug: alarm-updater (server mode)", 
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-updater",
+            "args": ["server"]
+        },
+        {
+            // Debug server with custom state file for testing scenarios.
+            "name": "test: alarm-server (custom state file)",
+            "type": "go", 
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-server",
+            "args": ["--state-file", "/tmp/test-alarm-state.json", ":9999"]
+        },
+        {
+            // Debug checker pointing to test server for integration testing.
+            "name": "test: alarm-checker (safe)",
+            "type": "go",
+            "request": "launch", 
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/alarm-checker",
+            "args": ["--debug", "localhost:9999"]
+        },
+        {
+            // Debug emergency trigger pointing to test server.
+            "name": "test: alarm-button-on (safe)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug", 
+            "program": "${workspaceFolder}/cmd/alarm-button-on",
+            "args": ["--debug", "localhost:9999"]
+        },
+        {
+            // Debug the currently open file (generic Go debugging).
+            "name": "debug: current file",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${fileDirname}"
+        },
+        {
+            // Run tests in the currently open package with debugging.
+            "name": "debug: current package tests",
+            "type": "go", 
+            "request": "launch",
+            "mode": "test",
+            "program": "${fileDirname}"
+        },
+        {
+            // Debug integration tests specifically.
+            "name": "debug: integration tests",
+            "type": "go",
+            "request": "launch", 
+            "mode": "test",
+            "program": "${workspaceFolder}/internal/integration"
+        }
+    ]
+}

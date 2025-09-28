@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package alarm.button;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/oshokin/alarm-button/api/v1;alarm";
+
+// AlarmService defines the core operations for the alarm button system.
+// This service handles both alarm activation/deactivation and status checks.
+service AlarmService {
+    // SetAlarmState allows clients to activate or deactivate the alarm.
+    rpc SetAlarmState (SetAlarmStateRequest) returns (AlarmStateResponse);
+    
+    // GetAlarmState returns the current status of the alarm system.
+    rpc GetAlarmState (GetAlarmStateRequest) returns (AlarmStateResponse);
+}
+
+// SystemActor identifies who performed an action in the system.
+// This provides audit trails and accountability for alarm operations.
+message SystemActor {
+    string hostname = 1;  // The machine where the action originated
+    string username = 2;  // The OS user who initiated the action
+}
+
+// SetAlarmStateRequest is used to change the alarm's active/inactive state.
+message SetAlarmStateRequest {
+    SystemActor actor = 1;          // Who is changing the state
+    bool is_enabled = 2;            // True to activate, false to deactivate
+}
+
+// GetAlarmStateRequest asks for the current alarm status.
+message GetAlarmStateRequest {
+    SystemActor requesting_actor = 1;  // Who is checking the status
+}
+
+// AlarmStateResponse provides the complete current state of the alarm system.
+message AlarmStateResponse {
+    google.protobuf.Timestamp timestamp = 1;  // When this state was recorded
+    SystemActor last_actor = 2;               // Who last changed the state
+    bool is_enabled = 3;                      // Current alarm status (on/off)
+}

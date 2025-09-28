@@ -1,23 +1,55 @@
-/.vscode
-alarm-button-off/*.exe
-alarm-button-off/*.log
-alarm-button-off/*.yaml
-alarm-button-on/*.exe
-alarm-button-on/*.log
-alarm-button-on/*.yaml
-alarm-checker/*.exe
-alarm-checker/*.log
-alarm-checker/*.yaml
-alarm-launcher/*.exe
-alarm-launcher/*.log
-alarm-launcher/*.yaml
-alarm-packager/*.exe
-alarm-packager/*.log
-alarm-packager/*.yaml
-alarm-server/*.log
-alarm-server/*.exe
-alarm-server/*.yaml
-alarm-updater/*.exe
-alarm-updater/*.log
-alarm-updater/*.yaml
-build.bat
+# Binaries (multiplatform)
+# *.exe
+*.dll
+*.so
+*.dylib
+/bin/
+
+# Go artifacts
+*.test
+*.out
+go.work
+debug
+__debug_bin
+
+# Runtime files
+*.log
+alarm-button-update-marker.bin
+alarm-button-state.json
+alarm-button-version.yaml
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+.vs/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*~
+
+# Dev tools
+/.task
+build.*
+tmp/
+coverage.*
+*.prof
+*.trace
+
+# Security
+*.key
+*.pem
+*.crt
+.env*
+
+# Temp files
+*.tmp
+*.cache
+*.pid
+*.db
