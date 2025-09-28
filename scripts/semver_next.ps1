@@ -4,6 +4,7 @@
 #   - any commit subject starting with "major:" -> MAJOR bump
 #   - else any starting with "feat:"            -> MINOR bump  
 #   - else any starting with "fix:"             -> PATCH bump
+#   - else any other commits                    -> PATCH bump (default)
 # If no tag exists, current version is 1.0.0.
 # When bumping MINOR, reset PATCH to 0; when bumping MAJOR, reset MINOR/PATCH to 0.
 
@@ -44,26 +45,24 @@ try {
 $currVer = Normalize-Version $rawTag
 
 # Determine the range of commits to analyze based on tag existence.
-if ($foundTag) {
-  # If tag exists, analyze commits since that tag.
-  $logRange = "$rawTag..HEAD"
-} else {
-  # If no tag exists, analyze all commits in current branch.
-  $logRange = 'HEAD'
-}
-
-# Collect all commit subjects in the specified range for analysis.
 $subjects = @()
 try {
-  # Extract commit subjects and trim whitespace for clean processing.
-  $subjects = git log --format=%s $logRange | ForEach-Object { $_.Trim() }
+  if ($foundTag) {
+    # If tag exists, analyze commits since that tag.
+    $logRange = "$rawTag..HEAD"
+    $subjects = git log --format=%s $logRange | ForEach-Object { $_.Trim() }
+  } else {
+    # If no tag exists, analyze all commits to avoid invalid range issues.
+    $subjects = git log --format=%s --all | ForEach-Object { $_.Trim() }
+  }
 } catch {
   # Continue with empty array if Git log fails.
 }
 
 # Determine the appropriate version bump based on commit message patterns.
 # Check in order of precedence: major > minor > patch.
-$bump = 'none'
+# Default to patch for any commits (even non-semantic ones).
+$bump = 'patch'
 if ($subjects | Where-Object { $_ -match '^(?i)major:' } | Select-Object -First 1) { 
   $bump = 'major' 
 }
@@ -124,13 +123,13 @@ if (-not $foundTag) {
 if ($EmitGitHubOutput -and $env:GITHUB_OUTPUT) {
   # GitHub Actions output format: append to GITHUB_OUTPUT file.
   Add-Content -Path $env:GITHUB_OUTPUT -Value ("last_tag=$currVer")
-  Add-Content -Path $env:GITHUB_OUTPUT -Value ("next_tag=$nextVer")
+  Add-Content -Path $env:GITHUB_OUTPUT -Value ("next_tag=v$nextVer")
   Add-Content -Path $env:GITHUB_OUTPUT -Value ("bump=$bump")
   Add-Content -Path $env:GITHUB_OUTPUT -Value ("has_release=$hasRelease")
 } else {
   # Standard output format: write to console for manual use.
   Write-Output "LAST_TAG=$currVer"
-  Write-Output "NEXT_TAG=$nextVer"  
+  Write-Output "NEXT_TAG=v$nextVer"  
   Write-Output "BUMP=$bump"
   Write-Output "HAS_RELEASE=$hasRelease"
 }

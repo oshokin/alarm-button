@@ -9,12 +9,13 @@ set -euo pipefail
 #   - any commit subject starting with "major:" -> MAJOR bump
 #   - else any starting with "feat:"            -> MINOR bump
 #   - else any starting with "fix:"             -> PATCH bump
+#   - else any other commits                    -> PATCH bump (default)
 # If no tag exists, current version is 1.0.0.
 # When bumping MINOR, reset PATCH to 0; when bumping MAJOR, reset MINOR/PATCH to 0.
 #
 # Standard outputs (stdout by default):
-#   LAST_TAG=...
-#   NEXT_TAG=...
+#   LAST_TAG=... (normalized version without v prefix)
+#   NEXT_TAG=... (new version with v prefix, e.g., v1.2.3)
 #   BUMP=major|minor|patch|none
 #   HAS_RELEASE=1|0
 #
@@ -51,21 +52,21 @@ curr_ver=$(normalize_version "$last_tag")
 if $found_tag; then
   # If tag exists, analyze commits since that tag to HEAD.
   range="${last_tag}..HEAD"
+  # Collect commit subjects since the last tag.
+  mapfile -t subjects < <(git log --format=%s ${range})
 else
   # If no tag exists, analyze all commits in current branch.
-  range="HEAD"
+  # Use git rev-list to avoid invalid range issues.
+  mapfile -t subjects < <(git log --format=%s --all)
 fi
-
-# Collect all commit subjects in the specified range for analysis.
-# Use mapfile to safely handle commit messages with special characters.
-mapfile -t subjects < <(git log --format=%s ${range})
 
 # Determine the appropriate version bump based on commit message patterns.
 # Enable case-insensitive matching for commit message analysis.
 shopt -s nocasematch
 
 # Check for version bump type with precedence: major > feat > fix.
-bump="none"
+# Default to patch for any commits (even non-semantic ones).
+bump="patch"
 
 # First pass: check for major version bump (breaking changes).
 for s in "${subjects[@]}"; do
@@ -76,7 +77,7 @@ for s in "${subjects[@]}"; do
 done
 
 # Second pass: check for minor version bump (new features) if no major found.
-if [[ $bump == "none" ]]; then
+if [[ $bump == "patch" ]]; then
   for s in "${subjects[@]}"; do
     if [[ $s =~ ^feat: ]]; then 
       bump="minor"
@@ -86,11 +87,12 @@ if [[ $bump == "none" ]]; then
 fi
 
 # Third pass: check for patch version bump (bug fixes) if no major/minor found.
-if [[ $bump == "none" ]]; then
+# Note: We already default to patch, so this preserves explicit fix: commits.
+if [[ $bump == "patch" ]]; then
   for s in "${subjects[@]}"; do
     if [[ $s =~ ^fix: ]]; then 
       bump="patch"
-      break  # Patch found, stop searching.
+      break  # Explicit patch found, maintain patch.
     fi
   done
 fi
@@ -139,7 +141,7 @@ if $emit_gh_output; then
   # GitHub Actions output format: append to GITHUB_OUTPUT file.
   {
     echo "last_tag=$curr_ver"
-    echo "next_tag=$next_ver"
+    echo "next_tag=v$next_ver"
     echo "bump=$bump"
     echo "has_release=$has_release"
   } >>"$GITHUB_OUTPUT"
@@ -147,7 +149,7 @@ else
   # Standard output format: write to stdout for manual use or other scripts.
   printf '%s\n' \
     "LAST_TAG=$curr_ver" \
-    "NEXT_TAG=$next_ver" \
+    "NEXT_TAG=v$next_ver" \
     "BUMP=$bump" \
     "HAS_RELEASE=$has_release"
 fi
