@@ -5,9 +5,63 @@
 
 A distributed emergency shutdown system designed to quickly and safely power down all office computers when a hungry tiger enters the building elevator and threatens to reach the office floor.
 
-## 🐅 Emergency Scenario
+## 🐅 Emergency Scenarios
+
+### **Primary Threat: Elevator Tiger Incident**
 
 When wildlife experts detect a hungry tiger has entered the building elevator, office safety protocols require immediate evacuation. This system ensures all computers are safely powered down to prevent data loss and equipment damage during the emergency evacuation.
+
+### **Additional Tiger Threat Scenarios**
+
+**🚪 Tiger Stuck in Revolving Door**
+
+- Tiger enters revolving door but gets confused by the rotation mechanism
+- Keeps going in circles for 10 minutes while growing increasingly frustrated
+- Security realizes the situation when they hear rhythmic growling every 30 seconds
+- Emergency shutdown prevents tiger from learning how doors work
+
+**☕ Tiger in Office Kitchen**  
+
+- Tiger discovers the coffee machine and becomes highly caffeinated
+- Starts frantically pressing alarm buttons while jittery from espresso
+- Attempts to use microwave but can't figure out the timer
+- System activates when tiger accidentally triggers motion sensors while doing coffee-induced zoomies
+
+**🖨️ Tiger vs. Printer Jam**
+
+- Tiger somehow gets into the office and immediately encounters paper jam
+- Becomes enraged at paper feeding mechanism (relatable)
+- Starts shredding printer manual with claws while printer keeps beeping
+- System detects unusual paper shredding patterns and activates emergency protocols
+
+**🗂️ Tiger Filing Tax Documents**
+
+- Tiger breaks into accounting department during tax season
+- Attempts to organize receipts but lacks opposable thumbs
+- Gets increasingly frustrated with Excel spreadsheets
+- Emergency shutdown prevents tiger from discovering the horrors of corporate bureaucracy
+
+**🎵 Tiger Karaoke Emergency**
+
+- Tiger discovers office karaoke machine left over from Christmas party
+- Starts howling along to "My Way" by Frank Sinatra at 3 AM
+- Security cameras detect large feline attempting to hold microphone
+- System activates to spare everyone from tiger's terrible singing
+
+**🍕 Tiger Food Delivery Confusion**
+
+- Hungry tiger follows pizza delivery person into building
+- Gets confused when pizza doesn't contain actual wildlife
+- Starts investigating vending machines for more substantial prey
+- Emergency protocols engage when tiger realizes office snacks are mostly carbs
+
+**📱 Tiger Zoom Meeting Incident**
+
+- Tiger accidentally joins all-hands meeting through open laptop
+- Entire company sees large cat staring directly into webcam
+- Tiger tilts head confused by dozens of tiny human faces on screen  
+- Meeting participants can't tell if it's a very realistic virtual background
+- System activates when someone finally realizes Steve from Accounting doesn't own a tiger
 
 ## 🏗️ Architecture
 
@@ -193,7 +247,7 @@ timeout: "30s"
 
 ### Emergency Activation
 
-When a hungry tiger is detected in the building:
+When any tiger scenario is detected in the building:
 
 1. **Any employee can trigger the alarm:**
 
@@ -208,6 +262,16 @@ When a hungry tiger is detected in the building:
    **OR just double-click the desktop shortcut!**
 
 2. **All office computers will automatically shutdown** within seconds as `alarm-checker` services detect the alarm state.
+
+### **Scenario-Specific Activation Guidelines**
+
+- **🚪 Revolving Door Tiger**: Activate while tiger is still spinning (gives you 10 minutes)
+- **☕ Caffeinated Tiger**: Activate immediately - coffee makes tigers unpredictable  
+- **🖨️ Printer Jam Tiger**: Wait until tiger finishes destroying printer (it's therapeutic for everyone)
+- **🗂️ Tax Document Tiger**: Activate before tiger discovers depreciation schedules
+- **🎵 Karaoke Tiger**: Activate only if tiger attempts songs from musicals
+- **🍕 Pizza Tiger**: Activate after tiger realizes there's no meat on veggie supreme
+- **📱 Zoom Tiger**: Activate when tiger tries to unmute itself
 
 ### Reset After Emergency
 
@@ -371,8 +435,14 @@ task install:lint             # Install golangci-lint
 task install:protoc           # Install protoc compiler
 task install:protoc-gen-go    # Install protoc-gen-go plugin
 task install:protoc-gen-go-grpc # Install protoc-gen-go-grpc plugin
-task install:githooks        # Configure Git hooks for semantic commit enforcement
-task remove:githooks         # Disable Git hooks for this repository
+task install:githooks         # Configure Git hooks for semantic commit enforcement
+task remove:githooks          # Disable Git hooks for this repository
+```
+
+### Version Management Tasks
+
+```bash
+task version:pull-tags         # Fetch latest tags from remote (useful for version detection)
 ```
 
 ### Examples
@@ -479,7 +549,7 @@ git push origin v1.0.0
 
 ### VSCode Debugging
 
-The project includes comprehensive debugging configurations in `.vscode/launch.json`:
+The project includes comprehensive debugging configurations in `.vscode-example/launch.json`:
 
 - **alarm-server** debugging (default and custom ports)
 - **alarm-button-on/off** debugging (with safety debug flags)
@@ -537,14 +607,51 @@ git push origin feature-branch
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## ⚠️ Disclaimer
+## ⚠️ Legal Disclaimer
 
-This software is designed for emergency situations involving hungry tigers entering office buildings via elevators.\
-While we've tested extensively with simulated tiger scenarios, actual tiger encounters may vary.\
-Please ensure your building has proper wildlife control measures in addition to this software solution.\
-\
+This software is designed for emergency situations involving hungry tigers entering office buildings via elevators and related feline workplace incidents.
+
+### **Testing Methodology**
+
+While we've tested extensively with simulated tiger scenarios using:
+
+- Cardboard tiger cutouts (surprisingly effective)
+- Employees wearing tiger costumes (less effective, caused different type of panic)
+- Actual zoo tigers (discontinued after legal complications)
+- CGI tigers (tigers were unimpressed by special effects)
+
+**Actual tiger encounters may vary significantly.**
+
+### **Known Limitations**
+
+- System may not detect tigers wearing business casual attire
+- False positives possible with very large orange cats
+- Effectiveness reduced if tiger has completed IT training
+- Does not account for tigers who have learned to use keycards
+- Vegetarian tigers may not trigger hunger-based detection algorithms
+
+### **Support Policy**
+
+- **Tiger-related incidents**: Covered under standard warranty
+- **Lion, leopard, or other big cats**: Please file bug report with species specification
+- **Domestic cats acting like tigers**: Not covered (this is normal cat behavior)
+- **Tigers successfully using office equipment**: Please contact our research department immediately
+
+### **Emergency Protocols**
+
 For non-tiger emergencies, consult your local emergency services.
+For tiger emergencies involving:
+
+- **Accounting software**: Contact your tax attorney
+- **HR violations**: Tigers are not subject to corporate policy
+- **Coffee machine malfunctions**: Priority Level 1 incident regardless of tiger presence
+
+Please ensure your building has proper wildlife control measures in addition to this software solution.
 
 ---
 
+## 🐅 **Final Notice**
+
 **Remember**: In case of an actual hungry tiger emergency, prioritize personal safety over data backup procedures. The software will handle the technical aspects automatically.
+
+*If a tiger is reading this documentation, please note that we have many delicious snacks in the break room and the computers taste terrible.*
