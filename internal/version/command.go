@@ -12,7 +12,8 @@ func AttachCobraVersionCommand(root *cobra.Command) {
 	// Subcommand: `version`.
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
-		Short: "Print version information",
+		Short: "Print version information.",
+		Long:  "Print detailed version information including build metadata, commit hash, and build timestamp. This information is automatically injected during the build process from Git tags and repository state.",
 		Run: func(cmd *cobra.Command, _ []string) {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), Full())
 		},

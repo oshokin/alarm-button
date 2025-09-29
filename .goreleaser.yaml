@@ -18,9 +18,9 @@ builds:
   - id: alarm-button-off
     main: ./cmd/alarm-button-off
     binary: alarm-button-off
-    goos: [linux, darwin, windows]  # Target operating systems.
-    goarch: [amd64, arm64]          # Target architectures.
-    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    goos: [linux, darwin, windows] # Target operating systems.
+    goarch: [amd64, arm64] # Target architectures.
+    env: [CGO_ENABLED=0] # Disable CGO for static binaries.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
       - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
@@ -28,53 +28,53 @@ builds:
   - id: alarm-button-on
     main: ./cmd/alarm-button-on
     binary: alarm-button-on
-    goos: [linux, darwin, windows]  # Target operating systems.
-    goarch: [amd64, arm64]          # Target architectures.
-    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    goos: [linux, darwin, windows] # Target operating systems.
+    goarch: [amd64, arm64] # Target architectures.
+    env: [CGO_ENABLED=0] # Disable CGO for static binaries.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
       - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
-  
+
   # Client daemon that monitors alarm state and initiates shutdown when activated.
   - id: alarm-checker
     main: ./cmd/alarm-checker
     binary: alarm-checker
-    goos: [linux, darwin, windows]  # Target operating systems.
-    goarch: [amd64, arm64]          # Target architectures.
-    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    goos: [linux, darwin, windows] # Target operating systems.
+    goarch: [amd64, arm64] # Target architectures.
+    env: [CGO_ENABLED=0] # Disable CGO for static binaries.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
       - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
-  
+
   # Server utility to prepare and distribute software updates.
   - id: alarm-packager
     main: ./cmd/alarm-packager
     binary: alarm-packager
-    goos: [linux, darwin, windows]  # Target operating systems.
-    goarch: [amd64, arm64]          # Target architectures.
-    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    goos: [linux, darwin, windows] # Target operating systems.
+    goarch: [amd64, arm64] # Target architectures.
+    env: [CGO_ENABLED=0] # Disable CGO for static binaries.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
       - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
-  
+
   # Central gRPC server that manages the distributed alarm state.
   - id: alarm-server
     main: ./cmd/alarm-server
     binary: alarm-server
-    goos: [linux, darwin, windows]  # Target operating systems.
-    goarch: [amd64, arm64]          # Target architectures.
-    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    goos: [linux, darwin, windows] # Target operating systems.
+    goarch: [amd64, arm64] # Target architectures.
+    env: [CGO_ENABLED=0] # Disable CGO for static binaries.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
       - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
-  
+
   # Client utility to download and apply software updates automatically.
   - id: alarm-updater
     main: ./cmd/alarm-updater
     binary: alarm-updater
-    goos: [linux, darwin, windows]  # Target operating systems.
-    goarch: [amd64, arm64]          # Target architectures.
-    env: [CGO_ENABLED=0]            # Disable CGO for static binaries.
+    goos: [linux, darwin, windows] # Target operating systems.
+    goarch: [amd64, arm64] # Target architectures.
+    env: [CGO_ENABLED=0] # Disable CGO for static binaries.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
       - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
@@ -82,27 +82,25 @@ builds:
 # Archive configuration for distributing the built binaries.
 archives:
   - id: archives
-    formats: [tar.gz]                   # Default archive format for Unix systems.
+    formats: [tar.gz] # Default archive format for Unix systems.
     format_overrides:
       - goos: windows
-        formats: [zip]                  # Use ZIP format for Windows compatibility.
-    wrap_in_directory: false            # Place files directly in archive root.
+        formats: [zip] # Use ZIP format for Windows compatibility.
+    wrap_in_directory: false # Place files directly in archive root.
     files:
-      - README.md                       # Include documentation in releases.
+      - README.md # Include documentation in releases.
 
 # Changelog generation settings for release notes.
 changelog:
-  use: git                              # Generate changelog from Git commit history.
-  sort: asc                             # Sort commits in ascending chronological order.
+  use: git # Generate changelog from Git commit history.
+  sort: asc # Sort commits in ascending chronological order.
   filters:
-    include:
-      - '^major:'                       # Include major version changes.
-      - '^feat:'                        # Include new features.
-      - '^fix:'                         # Include bug fixes.
+    exclude:
+      - "^Merge pull request" # Exclude merge commits.
+      - "^Merge branch" # Exclude branch merge commits.
 
 # GitHub release configuration for publishing artifacts.
 release:
   github:
-    owner: oshokin                      # GitHub repository owner.
-    name: alarm-button                  # GitHub repository name.
-
+    owner: oshokin # GitHub repository owner.
+    name: alarm-button # GitHub repository name.

@@ -33,7 +33,7 @@ func (c *coreWithLevel) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapc
 // With returns a new core with added fields to the wrapped core.
 // It returns a new coreWithLevel with the same level as the original core.
 //
-//nolint:ireturn // zapcore.Core is the correct abstraction to return here.
+//nolint:ireturn,nolintlint // Returning zapcore.Core is intended for zap integration.
 func (c *coreWithLevel) With(fields []zapcore.Field) zapcore.Core {
 	return &coreWithLevel{
 		c.Core.With(fields),
@@ -44,7 +44,7 @@ func (c *coreWithLevel) With(fields []zapcore.Field) zapcore.Core {
 // WithLevel is an option that creates a logger with the specified logging level based on an existing logger.
 // It returns a zap.Option that wraps the existing core in a coreWithLevel with the specified level.
 //
-//nolint:ireturn // Returning zap.Option is intended for zap integration.
+//nolint:ireturn,nolintlint // Returning zap.Option is intended for zap integration.
 func WithLevel(lvl zapcore.Level) zap.Option {
 	return zap.WrapCore(
 		func(core zapcore.Core) zapcore.Core {
