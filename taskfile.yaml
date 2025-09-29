@@ -117,7 +117,7 @@ vars:
   # -------------------------------
 
   # Detect the latest semantic version tag (v1.2.3 format only).
-  # If no proper semver tag exists, this will be empty and no version injection occurs.
+  # Note: This variable is computed before deps run. For fresh tags, use dynamic detection in build task.
   LATEST_SEMVER_TAG:
     sh: 'git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 2>/dev/null || echo ""'
   
@@ -356,38 +356,49 @@ tasks:
 
   build:
     desc: "Build all project binaries"
-    deps: [version:pull-tags]
     cmds:
       - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
       - |
-        # Display build information based on version detection.
-        {{if .LATEST_SEMVER_TAG}}
-          echo "Found semantic version tag: {{.LATEST_SEMVER_TAG}}"
-          echo "Building release version {{.CLEAN_VERSION}} with metadata injection..."
-        {{else}}
+        # Fetch latest tags and detect version AFTER deps have run
+        git fetch --tags origin >/dev/null 2>&1 || true
+        
+        # Dynamically detect the latest semantic version tag
+        LATEST_TAG=$(git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 2>/dev/null || echo "")
+        
+        if [[ -n "$LATEST_TAG" ]]; then
+          CLEAN_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
+          GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
+          BUILD_TIME=$({{if eq OS "windows"}}powershell -Command "Get-Date -UFormat \"%Y-%m-%dT%H:%M:%SZ\""{{else}}date -u +"%Y-%m-%dT%H:%M:%SZ"{{end}})
+          VERSION_LDFLAGS="-s -w -X github.com/oshokin/alarm-button/internal/version.Version=$CLEAN_VERSION -X github.com/oshokin/alarm-button/internal/version.Commit=$GIT_COMMIT -X github.com/oshokin/alarm-button/internal/version.BuildTime=$BUILD_TIME"
+          
+          echo "Found semantic version tag: $LATEST_TAG"
+          echo "Building release version $CLEAN_VERSION with metadata injection..."
+          echo ""
+          
+          # Build each binary with version injection
+          {{range .BINARIES}}
+          echo "Building {{.}} (v$CLEAN_VERSION)..."
+          cd "{{$.CMD_DIR}}{{$.PS}}{{.}}" && go build -ldflags "$VERSION_LDFLAGS" -o "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}" && cd {{$.TASKFILE_DIR}}
+          {{end}}
+          
+          echo ""
+          echo "Build completed successfully!"
+          echo "Version info: $CLEAN_VERSION (commit: $GIT_COMMIT, built: $BUILD_TIME)"
+        else
           echo "No semantic version tags found (v*.*.* format)"
           echo "Building development version without injection..."
-        {{end}}
-        echo ""
-        
-        # Build each binary with conditional version injection.
-        {{range .BINARIES}}
-          {{if $.LATEST_SEMVER_TAG}}
-            echo "Building {{.}} (v{{$.CLEAN_VERSION}})..."
-            cd "{{$.CMD_DIR}}{{$.PS}}{{.}}" && go build -ldflags "{{$.VERSION_LDFLAGS}}" -o "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}" && cd {{$.TASKFILE_DIR}}
-          {{else}}
-            echo "Building {{.}} (development)..."
-            cd "{{$.CMD_DIR}}{{$.PS}}{{.}}" && go build -o "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}" && cd {{$.TASKFILE_DIR}}
+          echo ""
+          
+          # Build each binary without version injection
+          {{range .BINARIES}}
+          echo "Building {{.}} (development)..."
+          cd "{{$.CMD_DIR}}{{$.PS}}{{.}}" && go build -o "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}" && cd {{$.TASKFILE_DIR}}
           {{end}}
-        {{end}}
-        
-        echo ""
-        echo "Build completed successfully!"
-        {{if .LATEST_SEMVER_TAG}}
-          echo "Version info: {{.CLEAN_VERSION}} (commit: {{.GIT_COMMIT}}, built: {{.BUILD_TIME}})"
-        {{else}}
+          
+          echo ""
+          echo "Build completed successfully!"
           echo "Tip: Create a semantic version tag (e.g., 'git tag v1.0.0') to enable version injection"
-        {{end}}
+        fi
 
   clean:
     desc: "Remove all built binaries"
