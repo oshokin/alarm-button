@@ -21,7 +21,7 @@ jobs:
     steps:
       # Check out repository with full Git history for version analysis.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0  # Fetch all tags and history for semantic versioning.
 
