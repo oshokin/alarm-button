@@ -341,11 +341,22 @@ tasks:
       CGO_ENABLED: "1"
 
   # -------------------------------
+  # Version Management
+  # -------------------------------
+
+  version:pull-tags:
+    desc: "Fetch latest tags from remote"
+    cmds:
+      - git fetch --tags origin
+    silent: false
+
+  # -------------------------------
   # Build & Cleanup
   # -------------------------------
 
   build:
     desc: "Build all project binaries"
+    deps: [version:pull-tags]
     cmds:
       - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
       - |
