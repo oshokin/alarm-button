@@ -19,12 +19,18 @@ jobs:
         with:
           fetch-depth: 0 # Fetch all history to access commit ranges.
 
-      # Check if this is a fork PR (external contributor).
-      # Fork PRs are exempt from semantic commit rules to encourage contributions.
-      - name: Check if fork PR
+      # Check if this is a fork PR or Dependabot PR (external contributor/automation).
+      # Fork PRs and Dependabot PRs are exempt from semantic commit rules.
+      - name: Check if fork or Dependabot PR
         id: fork_check
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          # Check if this is a Dependabot PR.
+          if [[ "${{ github.actor }}" == "dependabot[bot]" ]]; then
+            echo "is_fork=true" >> "$GITHUB_OUTPUT"
+            echo "This is a Dependabot PR (automated dependency update)."
+            echo "Semantic commit validation will be skipped."
+            echo "Dependabot uses its own commit format: build(deps): ..."
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
             IS_FORK="${{ github.event.pull_request.head.repo.fork }}"
             echo "is_fork=$IS_FORK" >> "$GITHUB_OUTPUT"
             if [[ "$IS_FORK" == "true" ]]; then
@@ -114,20 +120,32 @@ jobs:
 
           echo "All commit messages conform to policy."
 
-      # Acknowledge fork PRs and explain the policy.
-      # External contributors don't need to follow semantic commit rules.
-      - name: Fork PR acknowledgment
+      # Acknowledge fork PRs and Dependabot PRs and explain the policy.
+      # External contributors and automated tools don't need to follow semantic commit rules.
+      - name: Fork/Dependabot PR acknowledgment
         if: steps.fork_check.outputs.is_fork == 'true'
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo " Thank you for your contribution!"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "This is a fork PR from an external contributor."
-          echo "Semantic commit validation has been skipped."
-          echo "Your changes will be treated as a patch (fix:) by default."
-          echo ""
-          echo "The maintainer will decide the final version bump when merging."
-          echo "Feel free to use any commit message format you're comfortable with!"
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [[ "${{ github.actor }}" == "dependabot[bot]" ]]; then
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo " Dependabot PR detected"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "This is an automated dependency update from Dependabot."
+            echo "Semantic commit validation has been skipped."
+            echo "Dependabot uses its own commit format: build(deps): ..."
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          else
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo " Thank you for your contribution!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "This is a fork PR from an external contributor."
+            echo "Semantic commit validation has been skipped."
+            echo "Your changes will be treated as a patch (fix:) by default."
+            echo ""
+            echo "The maintainer will decide the final version bump when merging."
+            echo "Feel free to use any commit message format you're comfortable with!"
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          fi
