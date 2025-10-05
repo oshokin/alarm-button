@@ -1,6 +1,5 @@
 version: "3"
 
-# Suppress task output unless there are errors.
 silent: true
 
 vars:
@@ -8,26 +7,20 @@ vars:
   # Platform Configuration
   # -------------------------------
 
-  # Path separator for the current operating system.
+  # Path separator per OS.
   PS: '{{fromSlash "/"}}'
 
-  # Cross-platform commands because PowerShell STILL doesn't ship with proper Unix tools in 2025.
-  # (Yes, this is ridiculous. No, Microsoft hasn't fixed it yet.)
-
-  # Command to recursively remove files and directories.
-  RMRF: '{{if eq OS "windows"}}powershell Remove-Item -Force -Recurse -ErrorAction SilentlyContinue{{else}}rm -rf{{end}}'
-
-  # Command to create directories.
-  MKDIR: '{{if eq OS "windows"}}powershell New-Item -ItemType Directory -Force{{else}}mkdir -p{{end}}'
-
-  # Command to move files.
-  MV: '{{if eq OS "windows"}}powershell Move-Item -Force{{else}}mv{{end}}'
+  # Cross-platform mkdir/rm helpers.
+  RMRF: '{{if eq OS "windows"}}powershell.exe -Command "Remove-Item -Force -Recurse -ErrorAction SilentlyContinue -Path{{else}}rm -rf{{end}}'
+  RMRF_END: '{{if eq OS "windows"}}; exit 0"{{end}}'
+  MKDIR: '{{if eq OS "windows"}}powershell.exe -Command "New-Item -ItemType Directory -Force -Path{{else}}mkdir -p{{end}}'
+  MKDIR_END: '{{if eq OS "windows"}} | Out-Null"{{end}}'
 
   # -------------------------------
   # Project Directories
   # -------------------------------
 
-  # Directory for locally installed binaries.
+  # Local bin & temp dirs (kept in repo root).
   LOCAL_BIN: "{{.TASKFILE_DIR}}{{.PS}}bin"
   CMD_DIR: "{{.TASKFILE_DIR}}{{.PS}}cmd"
 
@@ -62,19 +55,20 @@ vars:
   PROTOC_GEN_GO_GRPC_BIN: "{{.LOCAL_BIN}}{{.PS}}protoc-gen-go-grpc{{exeExt}}"
 
   # -------------------------------
-  # Code Quality Tools
+  # Tool Versions
   # -------------------------------
 
   # Go imports tool (version can be 'latest' since installed via go install).
   GOIMPORTS_TAG: "latest"
-  GOIMPORTS_BIN: "{{.LOCAL_BIN}}{{.PS}}goimports{{exeExt}}"
-
-  # Linting tool configuration.
+  # Linting tool version.
   GOLANGCI_TAG: "latest"
-  GOLANGCI_BIN: "{{.LOCAL_BIN}}{{.PS}}golangci-lint{{exeExt}}"
 
-  # Linter configuration files.
-  GOLANGCI_CONFIG: ".golangci.yaml"
+  # -------------------------------
+  # Tool Binaries
+  # -------------------------------
+
+  GOIMPORTS_BIN: "{{.LOCAL_BIN}}{{.PS}}goimports{{exeExt}}"
+  GOLANGCI_BIN: "{{.LOCAL_BIN}}{{.PS}}golangci-lint{{exeExt}}"
 
   # -------------------------------
   # Version Detection
@@ -90,14 +84,20 @@ vars:
   GOIMPORTS_VERSION_OUTPUT:
     sh: 'go version -m "{{.GOIMPORTS_BIN}}" 2> /dev/null || true'
   GOLANGCI_VERSION_OUTPUT:
-    sh: '"{{.GOLANGCI_BIN}}" version 2> /dev/null || true'
+    sh: '{{if eq OS "windows"}}powershell -Command "try { if (Test-Path ''{{.GOLANGCI_BIN}}'') { & ''{{.GOLANGCI_BIN}}'' version } } catch { }; exit 0"{{else}}"{{.GOLANGCI_BIN}}" version 2> /dev/null || true{{end}}'
 
   # Regex patterns to extract version numbers from tool outputs.
   PROTOC_CURRENT_TAG: '{{regexFind "[0-9]+.[0-9]+" .PROTOC_VERSION_OUTPUT}}'
   PROTOC_GEN_GO_CURRENT_TAG: '{{regexFind "v([0-9]+.){2}([0-9a-z])+" .PROTOC_GEN_GO_VERSION_OUTPUT}}'
   PROTOC_GEN_GO_GRPC_CURRENT_TAG: 'v{{regexFind "([0-9]+.){2}([0-9a-z])+" .PROTOC_GEN_GO_GRPC_VERSION_OUTPUT}}'
-  GOLANGCI_CURRENT_TAG: '{{regexFind "v([0-9]+.){2}([0-9a-z])+" (regexFind "version v([0-9]+.){2}([0-9a-z])+ " .GOLANGCI_VERSION_OUTPUT)}}'
   GOIMPORTS_CURRENT_TAG: '{{regexFind "v([0-9]+.){2}([0-9a-z])+" (regexFind "golang.org/x/tools\tv([0-9]+.){2}([0-9a-z])+\t" .GOIMPORTS_VERSION_OUTPUT)}}'
+  GOLANGCI_CURRENT_TAG: '{{regexFind "v([0-9]+.){2}([0-9a-z])+" (regexFind "version v([0-9]+.){2}([0-9a-z])+ " .GOLANGCI_VERSION_OUTPUT)}}'
+
+  # -------------------------------
+  # Configuration Files
+  # -------------------------------
+
+  GOLANGCI_CONFIG: ".golangci.yaml"
 
   # -------------------------------
   # Project Binaries
@@ -117,39 +117,22 @@ vars:
   # -------------------------------
 
   # Detect the latest semantic version tag (v1.2.3 format only).
-  # Note: This variable is computed before deps run. For fresh tags, use dynamic detection in build task.
+  # Note: This variable is computed before deps run.
+  # For fresh tags, use dynamic detection in build task.
   LATEST_SEMVER_TAG:
     sh: 'git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 2>/dev/null || echo ""'
-  
+
   # Current Git commit hash for build metadata.
   GIT_COMMIT:
     sh: 'git rev-parse --short HEAD 2>/dev/null || echo "dev"'
-  
+
   # Build timestamp in UTC ISO format.
   BUILD_TIME:
     sh: '{{if eq OS "windows"}}powershell -Command "Get-Date -UFormat \"%Y-%m-%dT%H:%M:%SZ\""{{else}}date -u +"%Y-%m-%dT%H:%M:%SZ"{{end}}'
-  
-  # Clean version string (strip 'v' prefix) for injection.
-  CLEAN_VERSION:
-    sh: |
-      if [[ -n "{{.LATEST_SEMVER_TAG}}" ]]; then
-        echo "{{.LATEST_SEMVER_TAG}}" | sed 's/^v//'
-      else
-        echo ""
-      fi
-  
-  # Build flags for version injection (only set if semantic tag exists).
-  VERSION_LDFLAGS:
-    sh: |
-      if [[ -n "{{.LATEST_SEMVER_TAG}}" ]]; then
-        echo "-s -w -X github.com/oshokin/alarm-button/internal/version.Version={{.CLEAN_VERSION}} -X github.com/oshokin/alarm-button/internal/version.Commit={{.GIT_COMMIT}} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{.BUILD_TIME}}"
-      else
-        echo ""
-      fi
 
 tasks:
   # -------------------------------
-  # Default Task
+  # Default & Help
   # -------------------------------
 
   default:
@@ -157,22 +140,18 @@ tasks:
       - task -l
 
   # -------------------------------
-  # Installation Tasks
+  # Tool Installation
   # -------------------------------
 
-  install:all:
-    desc: "Bootstrap development environment"
+  _ensure-bin:
+    internal: true
     cmds:
-      - task: install:protoc
-      - task: install:protoc-gen-go
-      - task: install:protoc-gen-go-grpc
-      - task: install:lint
-      - task: install:githooks
+      - '{{.MKDIR}} ''{{.LOCAL_BIN}}''{{.MKDIR_END}}'
 
-  install:protoc:
-    desc: "Install protoc compiler"
+  install-protoc:
+    desc: "Install protoc compiler into ./bin"
+    deps: [_ensure-bin]
     cmds:
-      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
       - |
         # Only install if current version doesn't match desired version.
         {{if (not (eq .PROTOC_CURRENT_TAG .PROTOC_VERSION))}}
@@ -188,223 +167,227 @@ tasks:
             chmod +x "{{.PROTOC_BIN_IN_ZIP}}"
           {{end}}
           # Cleanup temporary files.
-          {{.RMRF}} "{{.PROTOC_ZIP_FULL_PATH}}"
+          {{.RMRF}} "{{.PROTOC_ZIP_FULL_PATH}}"{{.RMRF_END}}
           # Move binary to final location.
-          {{.MV}} "{{.PROTOC_BIN_IN_ZIP}}" "{{.PROTOC_BIN}}"
+          {{if eq OS "windows"}}
+            powershell Move-Item -Force "{{.PROTOC_BIN_IN_ZIP}}" "{{.PROTOC_BIN}}"
+          {{else}}
+            mv "{{.PROTOC_BIN_IN_ZIP}}" "{{.PROTOC_BIN}}"
+          {{end}}
           # Remove unnecessary extracted files.
-          {{.RMRF}} "{{.LOCAL_BIN}}{{.PS}}bin"
-          {{.RMRF}} "{{.LOCAL_BIN}}{{.PS}}readme.txt"
+          {{.RMRF}} "{{.LOCAL_BIN}}{{.PS}}bin"{{.RMRF_END}}
+          {{.RMRF}} "{{.LOCAL_BIN}}{{.PS}}readme.txt"{{.RMRF_END}}
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
 
-  install:protoc-gen-go:
-    desc: "Install protoc-gen-go plugin"
+  install-protoc-gen-go:
+    desc: "Install protoc-gen-go plugin into ./bin"
+    deps: [_ensure-bin]
     cmds:
-      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
       - |
         {{if (not (eq .PROTOC_GEN_GO_CURRENT_TAG .PROTOC_GEN_GO_TAG))}}
           echo "Installing protoc-gen-go, version: {{.PROTOC_GEN_GO_TAG}}..."
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_TAG}}
+          {{if eq OS "windows"}}
+            powershell.exe -Command "\$env:GOBIN = '{{.LOCAL_BIN}}'; go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_TAG}}"
+          {{else}}
+            go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_TAG}}
+          {{end}}
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
 
-  install:protoc-gen-go-grpc:
-    desc: "Install protoc-gen-go-grpc plugin"
+  install-protoc-gen-go-grpc:
+    desc: "Install protoc-gen-go-grpc plugin into ./bin"
+    deps: [_ensure-bin]
     cmds:
-      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
       - |
         {{if (not (eq .PROTOC_GEN_GO_GRPC_CURRENT_TAG .PROTOC_GEN_GO_GRPC_TAG))}}
           echo "Installing protoc-gen-go-grpc, version: {{.PROTOC_GEN_GO_GRPC_TAG}}..."
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_TAG}}
+          {{if eq OS "windows"}}
+            powershell.exe -Command "\$env:GOBIN = '{{.LOCAL_BIN}}'; go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_TAG}}"
+          {{else}}
+            go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_TAG}}
+          {{end}}
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
 
-  install:goimports:
-    desc: "Install goimports tool"
+  _install-goimports:
+    internal: true
+    deps: [_ensure-bin]
     cmds:
-      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
       - |
         {{if (not (eq .GOIMPORTS_CURRENT_TAG .GOIMPORTS_TAG))}}
           echo "Installing goimports, version: {{.GOIMPORTS_TAG}}..."
-          go install golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_TAG}}
+          {{if eq OS "windows"}}
+            powershell.exe -Command "\$env:GOBIN = '{{.LOCAL_BIN}}'; go install golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_TAG}}"
+          {{else}}
+            go install golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_TAG}}
+          {{end}}
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
 
-  install:lint:
-    desc: "Install golangci-lint"
+  install-lint:
+    desc: "Install golangci-lint into ./bin"
+    deps: [_ensure-bin]
     cmds:
-      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
       - |
+        # Only install if current version doesn't match desired version.
         {{if (not (eq .GOLANGCI_CURRENT_TAG .GOLANGCI_TAG))}}
           echo "Installing golangci-lint, version: {{.GOLANGCI_TAG}}..."
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_TAG}}
+          {{if eq OS "windows"}}
+            powershell.exe -Command "\$env:GOBIN = '{{.LOCAL_BIN}}'; go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_TAG}}"
+          {{else}}
+            go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_TAG}}
+          {{end}}
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
 
-  install:githooks:
+  install-tools:
+    desc: "Install all development tools (golangci-lint, protoc, protoc-gen-go, protoc-gen-go-grpc, goimports)"
+    deps: 
+      - install-lint
+      - install-protoc
+      - install-protoc-gen-go
+      - install-protoc-gen-go-grpc
+      - _install-goimports
+
+  # -------------------------------
+  # Git Hooks
+  # -------------------------------
+
+  install-githooks:
     desc: "Configure Git hooks for this repository"
     cmds:
       - |
         echo "Setting up Git hooks..."
         git config --local core.hooksPath .githooks
-        chmod +x .githooks/commit-msg
+        {{if ne OS "windows"}}
+          chmod +x .githooks/commit-msg
+        {{end}}
         echo "Git hooks configured successfully!"
         echo "Commit messages must now start with: fix:, feat:, or major:"
 
-  remove:githooks:
+  remove-githooks:
     desc: "Disable Git hooks for this repository"
     cmds:
       - |
         echo "Disabling Git hooks..."
         git config --local --unset core.hooksPath || echo "Hooks path was not set"
-        chmod -x .githooks/commit-msg 2>/dev/null || echo "Hook file not found"
         echo "Git hooks disabled. You can now use any commit message format."
 
   # -------------------------------
-  # Code Generation & Formatting
+  # Code Generation
   # -------------------------------
 
-  format:
-    desc: "Format Go code using goimports"
-    deps: [install:goimports]
-    cmds:
-      - '"{{.GOIMPORTS_BIN}}" -w ./'
-
-  generate:
+  generate-protobuf:
     desc: "Generate protobuf code and format"
     deps:
-      - install:protoc
-      - install:protoc-gen-go
-      - install:protoc-gen-go-grpc
-      - install:goimports
+      - install-protoc
+      - install-protoc-gen-go
+      - install-protoc-gen-go-grpc
+      - _install-goimports
     cmds:
-      - "{{.MKDIR}} internal/pb"
-      - 'PATH="{{.LOCAL_BIN}}:$PATH" "{{.PROTOC_BIN}}"
-        --go_out=internal/pb
-        --go_opt=paths=source_relative
-        --go-grpc_out=internal/pb
-        --go-grpc_opt=paths=source_relative
-        --proto_path={{.LOCAL_BIN}}{{.PS}}include
-        --proto_path=api
-        api/v1/*.proto'
-      - go mod tidy # Required to pull dependencies after code generation.
-      - task: format
+      - echo "Generating protobuf code..."
+      - '{{.MKDIR}} internal/pb{{.MKDIR_END}}'
+      - |
+        {{if eq OS "windows"}}
+          powershell.exe -Command "\$env:PATH = '{{.LOCAL_BIN}};' + \$env:PATH; & '{{.PROTOC_BIN}}' --go_out=internal/pb --go_opt=paths=source_relative --go-grpc_out=internal/pb --go-grpc_opt=paths=source_relative --proto_path={{.LOCAL_BIN}}{{.PS}}include --proto_path=api api/v1/*.proto"
+        {{else}}
+          PATH="{{.LOCAL_BIN}}:$PATH" "{{.PROTOC_BIN}}" --go_out=internal/pb --go_opt=paths=source_relative --go-grpc_out=internal/pb --go-grpc_opt=paths=source_relative --proto_path={{.LOCAL_BIN}}{{.PS}}include --proto_path=api api/v1/*.proto
+        {{end}}
+      - go mod tidy
+      - echo "Formatting generated code..."
+      - '"{{.GOIMPORTS_BIN}}" -w ./'
+      - echo "Protobuf generation completed successfully!"
 
   # -------------------------------
-  # Code Quality Checks
+  # Code Quality
   # -------------------------------
+
+  lint-fix:
+    desc: "Run golangci-lint with --fix"
+    deps: [install-lint]
+    cmds:
+      - '"{{.GOLANGCI_BIN}}" config verify'
+      - '"{{.GOLANGCI_BIN}}" run --fix'
 
   lint:
-    desc: "Run standard golangci-lint checks on changed files"
-    deps: [install:lint]
+    desc: "Run golangci-lint"
+    deps: [install-lint]
     cmds:
-      - '"{{.GOLANGCI_BIN}}" run --new-from-rev=origin/master --config={{.GOLANGCI_CONFIG}}'
-
-  lint:fix:
-    desc: "Run standard golangci-lint checks on changed files and auto-fix"
-    deps: [install:lint]
-    cmds:
-      - '"{{.GOLANGCI_BIN}}" run --new-from-rev=origin/master --config={{.GOLANGCI_CONFIG}} --fix'
-
-  lint:full:
-    desc: "Run standard golangci-lint checks on all files"
-    deps: [install:lint]
-    cmds:
-      - '"{{.GOLANGCI_BIN}}" run --config={{.GOLANGCI_CONFIG}}'
-
-  lint:full:fix:
-    desc: "Run standard golangci-lint checks on all files and auto-fix"
-    deps: [install:lint]
-    cmds:
-      - '"{{.GOLANGCI_BIN}}" run --config={{.GOLANGCI_CONFIG}} --fix'
+      - '"{{.GOLANGCI_BIN}}" config verify'
+      - '"{{.GOLANGCI_BIN}}" run'
 
   # -------------------------------
   # Testing
   # -------------------------------
 
   test:
-    desc: "Run all tests with verbose output"
+    desc: "Run unit tests"
     cmds:
       - go test -v ./...
 
-  test:race:
-    desc: "Run tests with race detector enabled"
+  test-race:
+    desc: "Run unit tests with race detector"
     cmds:
-      - '{{if eq OS "windows"}}echo "Ensure gcc is installed or use WSL for a smoother experience"{{end}}'
-      - go test -race -v ./...
+      - |
+        {{if eq OS "windows"}}
+          echo "Note: Race detector requires CGO. If this fails, install gcc (MinGW-w64) or use WSL."
+          powershell.exe -Command "\$env:CGO_ENABLED = '1'; go test -race -v ./..."
+        {{else}}
+          go test -race -v ./...
+        {{end}}
     env:
       CGO_ENABLED: "1"
+
+  # -------------------------------
+  # Build & Release
+  # -------------------------------
+
+  build:
+    desc: "Build all project binaries with version injection"
+    deps: [fetch-tags]
+    cmds:
+      - '{{.MKDIR}} ''{{.LOCAL_BIN}}''{{.MKDIR_END}}'
+      - |
+        {{if eq OS "windows"}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/build.ps1 -LocalBin "{{.LOCAL_BIN}}" -CmdDir "{{.CMD_DIR}}" -TaskfileDir "{{.TASKFILE_DIR}}" -Binaries {{range $i, $binary := .BINARIES}}{{if $i}},{{end}}"{{$binary}}"{{end}}
+        {{else}}
+          bash scripts/build.sh "{{.LOCAL_BIN}}" "{{.CMD_DIR}}" "{{.TASKFILE_DIR}}" {{range .BINARIES}}"{{.}}" {{end}}
+        {{end}}
+
+  # -------------------------------
+  # Cleanup
+  # -------------------------------
+
+  clean:
+    desc: "Remove binaries and temporary files"
+    cmds:
+      - '{{.RMRF}} ''{{.LOCAL_BIN}}''{{.RMRF_END}}'
 
   # -------------------------------
   # Version Management
   # -------------------------------
 
-  version:pull-tags:
-    desc: "Fetch latest tags from remote"
-    cmds:
-      - git fetch --tags origin
-    silent: false
-
-  # -------------------------------
-  # Build & Cleanup
-  # -------------------------------
-
-  build:
-    desc: "Build all project binaries"
-    cmds:
-      - '{{.MKDIR}} "{{.LOCAL_BIN}}"'
-      - |
-        # Fetch latest tags and detect version AFTER deps have run
-        git fetch --tags origin >/dev/null 2>&1 || true
-        
-        # Dynamically detect the latest semantic version tag
-        LATEST_TAG=$(git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 2>/dev/null || echo "")
-        
-        if [[ -n "$LATEST_TAG" ]]; then
-          CLEAN_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
-          GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
-          BUILD_TIME=$({{if eq OS "windows"}}powershell -Command "Get-Date -UFormat \"%Y-%m-%dT%H:%M:%SZ\""{{else}}date -u +"%Y-%m-%dT%H:%M:%SZ"{{end}})
-          VERSION_LDFLAGS="-s -w -X github.com/oshokin/alarm-button/internal/version.Version=$CLEAN_VERSION -X github.com/oshokin/alarm-button/internal/version.Commit=$GIT_COMMIT -X github.com/oshokin/alarm-button/internal/version.BuildTime=$BUILD_TIME"
-          
-          echo "Found semantic version tag: $LATEST_TAG"
-          echo "Building release version $CLEAN_VERSION with metadata injection..."
-          echo ""
-          
-          # Build each binary with version injection
-          {{range .BINARIES}}
-          echo "Building {{.}} (v$CLEAN_VERSION)..."
-          cd "{{$.CMD_DIR}}{{$.PS}}{{.}}" && go build -ldflags "$VERSION_LDFLAGS" -o "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}" && cd {{$.TASKFILE_DIR}}
-          {{end}}
-          
-          echo ""
-          echo "Build completed successfully!"
-          echo "Version info: $CLEAN_VERSION (commit: $GIT_COMMIT, built: $BUILD_TIME)"
-        else
-          echo "No semantic version tags found (v*.*.* format)"
-          echo "Building development version without injection..."
-          echo ""
-          
-          # Build each binary without version injection
-          {{range .BINARIES}}
-          echo "Building {{.}} (development)..."
-          cd "{{$.CMD_DIR}}{{$.PS}}{{.}}" && go build -o "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}" && cd {{$.TASKFILE_DIR}}
-          {{end}}
-          
-          echo ""
-          echo "Build completed successfully!"
-          echo "Tip: Create a semantic version tag (e.g., 'git tag v1.0.0') to enable version injection"
-        fi
-
-  clean:
-    desc: "Remove all built binaries"
+  fetch-tags:
+    desc: "Fetch tags from origin"
     cmds:
       - |
-        {{range .BINARIES}}
-          echo "Removing {{.}}..."
-          {{$.RMRF}} "{{$.LOCAL_BIN}}{{$.PS}}{{.}}{{exeExt}}"
+        echo "Fetching tags from origin..."
+        git fetch --tags
+
+  version-check:
+    desc: "Check what the next version would be based on commits"
+    deps: [fetch-tags]
+    cmds:
+      - |
+        echo "Analyzing commits for version bump..."
+        {{if eq OS "windows"}}
+          powershell -ExecutionPolicy Bypass -File scripts/semver_next.ps1
+        {{else}}
+          bash scripts/semver_next.sh
         {{end}}

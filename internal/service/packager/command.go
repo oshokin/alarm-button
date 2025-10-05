@@ -15,7 +15,7 @@ import (
 	"github.com/oshokin/alarm-button/internal/config"
 	"github.com/oshokin/alarm-button/internal/logger"
 	"github.com/oshokin/alarm-button/internal/service/common"
-	updater "github.com/oshokin/alarm-button/internal/service/updater"
+	"github.com/oshokin/alarm-button/internal/service/updater"
 )
 
 // Options contains inputs for the packager entry point.
@@ -57,10 +57,10 @@ func Run(ctx context.Context, opts *Options) error {
 
 	pkg, err := newPackager(ctx, opts.ConfigPath, cfg)
 	if err != nil {
-		return fmt.Errorf("initialise packager: %w", err)
+		return fmt.Errorf("initialize packager: %w", err)
 	}
 
-	if err := pkg.Run(ctx); err != nil {
+	if err = pkg.Run(ctx); err != nil {
 		return fmt.Errorf("packager failed: %w", err)
 	}
 
@@ -144,11 +144,7 @@ func (p *packager) saveDescription() error {
 		return err
 	}
 
-	if err := os.WriteFile(updater.VersionFilename, contents, updater.DefaultFileMode); err != nil {
-		return err
-	}
-
-	return nil
+	return os.WriteFile(updater.VersionFilename, contents, updater.DefaultFileMode)
 }
 
 // printNextSteps logs human-readable guidance for next actions with the created files.
@@ -204,7 +200,9 @@ func (p *packager) ensureServerReachable(ctx context.Context) error {
 		return err
 	}
 
-	client, err := common.Dial(ctx, p.cfg.ServerAddress, common.WithCallTimeout(p.cfg.Timeout))
+	var client *common.Client
+
+	client, err = common.Dial(ctx, p.cfg.ServerAddress, common.WithCallTimeout(p.cfg.Timeout))
 	if err != nil {
 		return err
 	}
@@ -214,7 +212,7 @@ func (p *packager) ensureServerReachable(ctx context.Context) error {
 		_ = client.Close()
 	}()
 
-	if _, err := client.GetAlarmState(ctx, actor); err != nil {
+	if _, err = client.GetAlarmState(ctx, actor); err != nil {
 		return err
 	}
 

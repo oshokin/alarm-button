@@ -30,7 +30,7 @@ const (
 	// MarkerFilename marks that the updater is running right now to avoid parallel execution.
 	MarkerFilename = "alarm-button-update-marker.bin"
 
-	// DefaultFileMode is used when producing artefacts for distribution.
+	// DefaultFileMode is used when producing artifacts for distribution.
 	DefaultFileMode os.FileMode = 0o755
 
 	// DefaultChecksumFunction is used to calculate update file hashes.
@@ -51,7 +51,7 @@ const (
 	versionCommandTimeout = 10 * time.Second
 )
 
-// AllowedUserRoles returns artefact lists per role for the current platform.
+// AllowedUserRoles returns artifact lists per role for the current platform.
 func AllowedUserRoles() map[string][]string {
 	return map[string][]string{
 		"client": {
@@ -77,7 +77,7 @@ func ExecutablesByUserRoles() map[string]string {
 	}
 }
 
-// FilesWithChecksum returns the list of artefacts to hash for this platform.
+// FilesWithChecksum returns the list of artifacts to hash for this platform.
 func FilesWithChecksum() []string {
 	return []string{
 		"alarm-button-off" + getExecutableExtension(),
@@ -101,7 +101,7 @@ type Description struct {
 	Executables map[string]string `yaml:"executables"`
 }
 
-// NewDescription produces a Description initialised with defaults.
+// NewDescription produces a Description initialized with defaults.
 func NewDescription() *Description {
 	return &Description{
 		VersionNumber: version.Short(),
@@ -123,7 +123,7 @@ func GetFileChecksum(path string) ([]byte, error) {
 	}
 
 	hasher := DefaultChecksumFunction.New()
-	if _, err := hasher.Write(contents); err != nil {
+	if _, err = hasher.Write(contents); err != nil {
 		return nil, fmt.Errorf("calculate checksum: %w", err)
 	}
 
@@ -144,11 +144,11 @@ func IsUpdaterRunningNow(ctx context.Context) bool {
 
 		logger.Info(ctx, "The update marker is too old, attempting cleanup")
 
-		if err := terminateProcessByName(updaterExecutable()); err != nil {
+		if err = terminateProcessByName(updaterExecutable()); err != nil {
 			return true
 		}
 
-		if err := os.Remove(MarkerFilename); err != nil {
+		if err = os.Remove(MarkerFilename); err != nil {
 			return true
 		}
 
@@ -183,12 +183,14 @@ func terminateProcessByName(processName string) error {
 			continue
 		}
 
-		runningProcess, err := os.FindProcess(process.Pid())
+		var runningProcess *os.Process
+
+		runningProcess, err = os.FindProcess(process.Pid())
 		if err != nil {
 			return err
 		}
 
-		if err := runningProcess.Kill(); err != nil {
+		if err = runningProcess.Kill(); err != nil {
 			return err
 		}
 	}

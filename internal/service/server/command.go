@@ -58,7 +58,7 @@ func Run(ctx context.Context, opts *Options) error {
 	// Create alarm service with state management.
 	svc, err := newService(ctx, repo)
 	if err != nil {
-		return fmt.Errorf("initialise service: %w", err)
+		return fmt.Errorf("initialize service: %w", err)
 	}
 
 	// Setup TCP listener for gRPC server.
@@ -86,7 +86,7 @@ func Run(ctx context.Context, opts *Options) error {
 		close(done)
 	}()
 
-	if err := grpcServer.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+	if err = grpcServer.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		return fmt.Errorf("serve gRPC: %w", err)
 	}
 

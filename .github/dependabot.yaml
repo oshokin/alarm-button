@@ -1,33 +1,26 @@
-# Dependabot configuration for automated dependency updates.
-# This file configures GitHub's Dependabot to automatically check for and create
-# pull requests for outdated dependencies in both GitHub Actions and Go modules.
-
-version: 2  # Use Dependabot configuration file format version 2.
+version: 2 # Required: Specifies the Dependabot configuration version (v2 is the latest).
 
 updates:
-  # GitHub Actions dependency updates configuration.
-  # Monitors workflow files for outdated action versions and creates update PRs.
-  - package-ecosystem: "github-actions"  # Target GitHub Actions in workflow files.
-    directory: "/"                       # Scan entire repository for workflow files.
+  # Configuration for updating GitHub Actions dependencies.
+  - package-ecosystem: "github-actions" # Specifies the package ecosystem (GitHub Actions).
+    directory: "/" # Directory where the dependency files are located (root directory).
     schedule:
-      interval: "weekly"                 # Check for updates every week.
-      day: "monday"                      # Run checks on Monday mornings.
+      interval: "weekly" # Check for updates weekly.
+      day: "monday" # Run the update check every Monday.
     assignees:
-      - "oshokin"                        # Assign update PRs to repository owner.
+      - "oshokin" # Assign a specific assignee for dependency update PRs.
     labels:
-      - "github-actions dependencies"    # Label PRs for easy identification.
-    open-pull-requests-limit: 1          # Limit to 1 open PR to avoid spam.
+      - "github-actions dependencies" # Apply a label to dependency update PRs for GitHub Actions.
+    open-pull-requests-limit: 1 # Limit the number of open PRs to 1 at a time.
 
-  # Go module dependency updates configuration.
-  # Monitors go.mod and go.sum files for outdated Go dependencies.
-  - package-ecosystem: "gomod"           # Target Go modules (go.mod/go.sum files).
-    directory: "/"                       # Scan repository root for Go module files.
+  # Configuration for updating Go module dependencies.
+  - package-ecosystem: "gomod" # Specifies the package ecosystem (Go modules).
+    directory: "/" # Directory where the dependency files are located (root directory).
     schedule:
-      interval: "weekly"                 # Check for updates every week.
-      day: "monday"                      # Run checks on Monday mornings.
+      interval: "weekly" # Check for updates weekly.
+      day: "monday" # Run the update check every Monday.
     assignees:
-      - "oshokin"                        # Assign update PRs to repository owner.
+      - "oshokin" # Assign a specific assignee for dependency update PRs.
     labels:
-      - "go dependencies"                # Label PRs for easy identification.
-    open-pull-requests-limit: 1          # Limit to 1 open PR to avoid spam.
-
+      - "go dependencies" # Apply a label to dependency update PRs for Go modules.
+    open-pull-requests-limit: 1 # Limit the number of open PRs to 1 at a time.

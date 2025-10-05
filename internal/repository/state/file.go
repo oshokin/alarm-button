@@ -58,7 +58,7 @@ func (r *FileRepository) Load(_ context.Context) (*domain.State, error) {
 	}
 
 	var protoState pb.AlarmStateResponse
-	if err := protojson.Unmarshal(contents, &protoState); err != nil {
+	if err = protojson.Unmarshal(contents, &protoState); err != nil {
 		return nil, fmt.Errorf("decode state file: %w", err)
 	}
 
@@ -82,7 +82,7 @@ func (r *FileRepository) Save(_ context.Context, state *domain.State) error {
 		return fmt.Errorf("encode state: %w", err)
 	}
 
-	if err := os.WriteFile(r.path, data, config.DefaultFilePermissions); err != nil {
+	if err = os.WriteFile(r.path, data, config.DefaultFilePermissions); err != nil {
 		return fmt.Errorf("write state file: %w", err)
 	}
 

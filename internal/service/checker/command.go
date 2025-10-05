@@ -85,11 +85,11 @@ func Run(ctx context.Context, opts *Options) error {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info(ctx, "Context cancelled, exiting")
+			logger.Info(ctx, "Context canceled, exiting")
 			return nil
 		case <-ticker.C:
 			// Check alarm state and handle shutdown if needed.
-			if err := checkState(ctx, client, actor, opts.Debug); err != nil {
+			if err = checkState(ctx, client, actor, opts.Debug); err != nil {
 				if errors.Is(err, errShutdownInitiated) {
 					logger.Info(ctx, "Shutdown initiated, exiting")
 					return nil
@@ -126,21 +126,21 @@ func checkState(ctx context.Context, client *common.Client, actor *pb.SystemActo
 	logger.Infof(ctx, "Alarm state: %s at %s", status, timestamp)
 
 	// Process alarm enabled state.
-	if state.GetIsEnabled() {
-		if debug {
-			logger.Info(ctx, "Alarm enabled but debug mode prevents shutdown")
-			return nil
-		}
-
-		logger.Info(ctx, "Alarm enabled, initiating shutdown")
-
-		// Trigger system shutdown.
-		if err := power.Shutdown(ctx); err != nil {
-			return err
-		}
-
-		return errShutdownInitiated
+	if !state.GetIsEnabled() {
+		return nil
 	}
 
-	return nil
+	if debug {
+		logger.Info(ctx, "Alarm enabled but debug mode prevents shutdown")
+		return nil
+	}
+
+	logger.Info(ctx, "Alarm enabled, initiating shutdown")
+
+	// Trigger system shutdown.
+	if err = power.Shutdown(ctx); err != nil {
+		return err
+	}
+
+	return errShutdownInitiated
 }

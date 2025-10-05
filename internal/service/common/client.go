@@ -25,7 +25,7 @@ type Client struct {
 	callTimeout time.Duration
 }
 
-// Option configures client behaviour.
+// Option configures client behavior.
 type Option func(*Client)
 
 // WithCallTimeout sets a default timeout for service calls.

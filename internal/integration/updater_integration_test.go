@@ -18,12 +18,10 @@ import (
 )
 
 // TestUpdater_Run_FetchesAndApplies serves a manifest and file over HTTP and verifies the updater downloads and applies before failing to start.
-//
-//nolint:funlen // Integration test requires comprehensive setup and verification.
 func TestUpdater_Run_FetchesAndApplies(t *testing.T) {
 	// Setup test directory and change working directory.
 	dir := t.TempDir()
-	prev, _ := os.Getwd()
+	prev, _ := os.Getwd() //nolint:errcheck // Test code needs simple os.Getwd for directory change.
 
 	t.Chdir(dir)
 	t.Cleanup(func() {
@@ -59,12 +57,12 @@ func TestUpdater_Run_FetchesAndApplies(t *testing.T) {
 	mux.HandleFunc(
 		"/"+updater.VersionFilename,
 		func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write(manifestBytes)
+			_, _ = w.Write(manifestBytes) //nolint:errcheck // Test code needs simple http.Write for manifest.
 		},
 	)
 
 	mux.HandleFunc("/"+fileName, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fileBody)
+		_, _ = w.Write(fileBody) //nolint:errcheck // Test code needs simple http.Write for file.
 	})
 
 	ts := httptest.NewServer(mux)

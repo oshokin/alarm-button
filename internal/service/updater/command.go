@@ -27,7 +27,7 @@ import (
 
 var (
 	errUpdaterAlreadyRunning  = errors.New("the updater is already running")
-	errSettingsNotInitialised = errors.New("settings are not initialised")
+	errSettingsNotInitialised = errors.New("settings are not initialized")
 	errEmptyDescription       = errors.New("update description is empty")
 	errNoRoleFiles            = errors.New("unable to find files for role")
 	errNoChecksum             = errors.New("checksum missing for file")
@@ -51,6 +51,7 @@ type Options struct {
 type runner struct {
 	description        *Description      // Remote manifest describing the release.
 	cfg                *config.Config    // Connection configuration loaded from YAML.
+	localVersion       string            // Detected local version.
 	IsUpdateNeeded     bool              // Whether client files differ from server checksums.
 	temporaryDirectory string            // Where new files are downloaded before apply.
 	downloadedFiles    map[string]string // Logical name -> local temp path.
@@ -68,7 +69,7 @@ func Run(ctx context.Context, opts *Options) error {
 
 	defer up.cleanup(ctx)
 
-	if err := up.Run(ctx); err != nil {
+	if err = up.Run(ctx); err != nil {
 		logger.ErrorKV(ctx, "Updater run failed", "error", err)
 		return err
 	}
@@ -94,7 +95,7 @@ func newRunner(ctx context.Context, opts *Options) (*runner, error) {
 		return u, err
 	}
 
-	if err := updateMarker.Close(); err != nil {
+	if err = updateMarker.Close(); err != nil {
 		return u, err
 	}
 
@@ -103,7 +104,9 @@ func newRunner(ctx context.Context, opts *Options) (*runner, error) {
 		configPath = config.DefaultConfigFilename
 	}
 
-	settings, err := config.Load(configPath)
+	var settings *config.Config
+
+	settings, err = config.Load(configPath)
 	if err != nil {
 		return u, err
 	}
@@ -111,7 +114,7 @@ func newRunner(ctx context.Context, opts *Options) (*runner, error) {
 	settings.UpdateType = strings.TrimSpace(opts.UpdateType)
 	u.cfg = settings
 
-	if err := u.ensureServerReachable(ctx); err != nil {
+	if err = u.ensureServerReachable(ctx); err != nil {
 		return u, err
 	}
 
@@ -126,9 +129,35 @@ func newRunner(ctx context.Context, opts *Options) (*runner, error) {
 // 5) Verify checksums.
 // 6) Download and apply files if needed.
 // 7) Start the target executable.
-//
-//nolint:cyclop,nestif // Complex update workflow requires multiple steps and conditionals.
 func (u *runner) Run(ctx context.Context) error {
+	// Preparation.
+	if err := u.prepareForUpdate(ctx); err != nil {
+		return err
+	}
+
+	// Determine if update is needed.
+	versionUpdateNeeded, err := u.determineUpdateNeeded(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Execute update if needed.
+	if err = u.executeUpdateIfNeeded(ctx, versionUpdateNeeded); err != nil {
+		return err
+	}
+
+	// Start required executables.
+	logger.Info(ctx, "Starting required executables")
+
+	if err = u.startRequiredExecutables(ctx); err != nil {
+		return fmt.Errorf("start required executables: %w", err)
+	}
+
+	return nil
+}
+
+// prepareForUpdate handles the initial preparation steps for the update process.
+func (u *runner) prepareForUpdate(ctx context.Context) error {
 	logger.Info(ctx, "Terminating alarm button processes forcibly")
 
 	if err := u.terminateAlarmButtonProcesses(); err != nil {
@@ -137,8 +166,7 @@ func (u *runner) Run(ctx context.Context) error {
 
 	logger.Info(ctx, "Detecting local version from installed executable")
 
-	localVersion, err := u.detectLocalVersion(ctx)
-	if err != nil {
+	if err := u.detectAndSetLocalVersion(ctx); err != nil {
 		return fmt.Errorf("detect local version: %w", err)
 	}
 
@@ -148,49 +176,68 @@ func (u *runner) Run(ctx context.Context) error {
 		return fmt.Errorf("download update description: %w", err)
 	}
 
-	remoteVersion := u.description.VersionNumber
+	return nil
+}
 
-	// Compare versions first for fast decision making
-	versionUpdateNeeded := u.compareVersions(ctx, localVersion, remoteVersion)
+// detectAndSetLocalVersion detects the local version and stores it for later use.
+func (u *runner) detectAndSetLocalVersion(ctx context.Context) error {
+	localVersion, err := u.detectLocalVersion(ctx)
+	if err != nil {
+		return err
+	}
+
+	u.localVersion = localVersion
+
+	return nil
+}
+
+// determineUpdateNeeded checks if an update is required based on version and checksum comparison.
+func (u *runner) determineUpdateNeeded(ctx context.Context) (bool, error) {
+	remoteVersion := u.description.VersionNumber
+	versionUpdateNeeded := u.compareVersions(ctx, u.localVersion, remoteVersion)
 
 	logger.Info(ctx, "Verifying the checksum of files on the client and server")
 
 	if err := u.validateChecksum(); err != nil {
-		return fmt.Errorf("validate checksum: %w", err)
+		return false, fmt.Errorf("validate checksum: %w", err)
 	}
 
-	// Update if version differs OR files are corrupted
-	if versionUpdateNeeded || u.IsUpdateNeeded {
-		if versionUpdateNeeded {
-			logger.InfoKV(ctx, "Version update required", "reason", "version_mismatch")
-		}
+	return versionUpdateNeeded, nil
+}
 
-		if u.IsUpdateNeeded {
-			logger.InfoKV(ctx, "File update required", "reason", "checksum_mismatch")
-		}
-
-		logger.Info(ctx, "Downloading update files to a temporary folder")
-
-		if err := u.downloadFiles(ctx); err != nil {
-			return fmt.Errorf("download update files: %w", err)
-		}
-
-		logger.Info(ctx, "Updating files on the client")
-
-		if err := u.updateFiles(ctx); err != nil {
-			return fmt.Errorf("update files on client: %w", err)
-		}
-	} else {
+// executeUpdateIfNeeded performs the update process if either version or file updates are needed.
+func (u *runner) executeUpdateIfNeeded(ctx context.Context, versionUpdateNeeded bool) error {
+	if !versionUpdateNeeded && !u.IsUpdateNeeded {
 		logger.Info(ctx, "No update required - version and files are current")
+		return nil
 	}
 
-	logger.Info(ctx, "Starting required executables")
+	u.logUpdateReasons(ctx, versionUpdateNeeded)
 
-	if err := u.startRequiredExecutables(ctx); err != nil {
-		return fmt.Errorf("start required executables: %w", err)
+	logger.Info(ctx, "Downloading update files to a temporary folder")
+
+	if err := u.downloadFiles(ctx); err != nil {
+		return fmt.Errorf("download update files: %w", err)
+	}
+
+	logger.Info(ctx, "Updating files on the client")
+
+	if err := u.updateFiles(ctx); err != nil {
+		return fmt.Errorf("update files on client: %w", err)
 	}
 
 	return nil
+}
+
+// logUpdateReasons logs the reasons why an update is needed.
+func (u *runner) logUpdateReasons(ctx context.Context, versionUpdateNeeded bool) {
+	if versionUpdateNeeded {
+		logger.InfoKV(ctx, "Version update required", "reason", "version_mismatch")
+	}
+
+	if u.IsUpdateNeeded {
+		logger.InfoKV(ctx, "File update required", "reason", "checksum_mismatch")
+	}
 }
 
 // detectLocalVersion runs the appropriate executable to get the current version.
@@ -211,7 +258,6 @@ func (u *runner) detectLocalVersion(ctx context.Context) (string, error) {
 	defer cancel()
 
 	// Try to execute: alarm-checker version OR alarm-server version
-	//nolint:gosec // Executable path is controlled and version arg is safe.
 	cmd := exec.CommandContext(cmdCtx, executable, "version")
 
 	output, err := cmd.Output()
@@ -258,7 +304,8 @@ func (u *runner) compareVersions(ctx context.Context, localVersion, remoteVersio
 	logger.InfoKV(ctx, "Versions match, checking file integrity",
 		"version", localVersion)
 
-	return false // Still check checksums for integrity
+	// Still check checksums for integrity.
+	return false
 }
 
 // ensureServerReachable verifies that the server is reachable and responsive.
@@ -272,7 +319,9 @@ func (u *runner) ensureServerReachable(ctx context.Context) error {
 		return err
 	}
 
-	client, err := common.Dial(ctx, u.cfg.ServerAddress, common.WithCallTimeout(u.cfg.Timeout))
+	var client *common.Client
+
+	client, err = common.Dial(ctx, u.cfg.ServerAddress, common.WithCallTimeout(u.cfg.Timeout))
 	if err != nil {
 		return err
 	}
@@ -281,7 +330,7 @@ func (u *runner) ensureServerReachable(ctx context.Context) error {
 		_ = client.Close()
 	}()
 
-	if _, err := client.GetAlarmState(ctx, actor); err != nil {
+	if _, err = client.GetAlarmState(ctx, actor); err != nil {
 		return err
 	}
 
@@ -312,12 +361,14 @@ func (u *runner) terminateAlarmButtonProcesses() error {
 			continue
 		}
 
-		runningProcess, err := os.FindProcess(processID)
+		var runningProcess *os.Process
+
+		runningProcess, err = os.FindProcess(processID)
 		if err != nil {
 			return err
 		}
 
-		if err := runningProcess.Kill(); err != nil {
+		if err = runningProcess.Kill(); err != nil {
 			return err
 		}
 	}
@@ -344,7 +395,7 @@ func (u *runner) fillUpdateDescription() error {
 	}
 
 	var desc Description
-	if err := yaml.Unmarshal(data, &desc); err != nil {
+	if err = yaml.Unmarshal(data, &desc); err != nil {
 		return err
 	}
 
@@ -364,7 +415,7 @@ func (u *runner) getFileBodyFromServer(ctx context.Context, fileName string) (*h
 	serverUpdateURL.Path = path.Join(serverUpdateURL.Path, fileName)
 	finalURL := serverUpdateURL.String()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, finalURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, finalURL, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -384,8 +435,6 @@ func (u *runner) getFileBodyFromServer(ctx context.Context, fileName string) (*h
 // ValidateChecksum compares local and server checksums to decide whether an update is required.
 // It returns early on the first mismatch to avoid unnecessary I/O when an update
 // is already known to be needed.
-//
-//nolint:cyclop // Clarity of step-wise validation is preferred here.
 func (u *runner) validateChecksum() error {
 	if u.description == nil {
 		return errEmptyDescription
@@ -397,45 +446,64 @@ func (u *runner) validateChecksum() error {
 	}
 
 	for _, fileName := range files {
-		serverFileBase64, ok := u.description.Files[fileName]
-		if !ok {
-			return fmt.Errorf("checksum for %s: %w", fileName, errNoChecksum)
-		}
-
-		serverFileChecksum, err := base64.StdEncoding.DecodeString(serverFileBase64)
+		needsUpdate, err := u.validateFileChecksum(fileName)
 		if err != nil {
 			return err
 		}
 
-		isClientChecksumCorrect := true
-
-		if _, err := os.Stat(fileName); err != nil {
-			if os.IsNotExist(err) {
-				isClientChecksumCorrect = false
-			} else {
-				return err
-			}
-		}
-
-		if isClientChecksumCorrect {
-			clientChecksum, err := GetFileChecksum(fileName)
-			if err != nil {
-				return err
-			}
-
-			if !bytes.Equal(serverFileChecksum, clientChecksum) {
-				isClientChecksumCorrect = false
-			}
-		}
-
-		if !isClientChecksumCorrect {
+		if needsUpdate {
 			u.IsUpdateNeeded = true
-
 			return nil
 		}
 	}
 
 	return nil
+}
+
+// validateFileChecksum validates a single file's checksum against the server.
+// Returns true if the file needs updating, false if it's up to date.
+func (u *runner) validateFileChecksum(fileName string) (bool, error) {
+	serverChecksum, err := u.getServerChecksum(fileName)
+	if err != nil {
+		return false, err
+	}
+
+	clientChecksum, err := u.getClientChecksum(fileName)
+	if err != nil {
+		return false, err
+	}
+
+	return !bytes.Equal(serverChecksum, clientChecksum), nil
+}
+
+// getServerChecksum retrieves and decodes the server checksum for a file.
+func (u *runner) getServerChecksum(fileName string) ([]byte, error) {
+	serverFileBase64, hasDescription := u.description.Files[fileName]
+	if !hasDescription {
+		return nil, fmt.Errorf("checksum for %s: %w", fileName, errNoChecksum)
+	}
+
+	serverFileChecksum, err := base64.StdEncoding.DecodeString(serverFileBase64)
+	if err != nil {
+		return nil, err
+	}
+
+	return serverFileChecksum, nil
+}
+
+// getClientChecksum retrieves the client checksum for a file.
+// Returns nil checksum if the file doesn't exist.
+func (u *runner) getClientChecksum(fileName string) ([]byte, error) {
+	if _, err := os.Stat(fileName); err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist, needs update.
+			return nil, nil
+		}
+
+		return nil, err
+	}
+
+	return GetFileChecksum(fileName)
 }
 
 // downloadFiles downloads required files into a temporary directory.
@@ -449,7 +517,9 @@ func (u *runner) downloadFiles(ctx context.Context) error {
 
 	files := u.description.Roles[u.cfg.UpdateType]
 	for _, fileName := range files {
-		response, err := u.getFileBodyFromServer(ctx, fileName)
+		var response *http.Response
+
+		response, err = u.getFileBodyFromServer(ctx, fileName)
 		if err != nil {
 			if response != nil {
 				_ = response.Body.Close()
@@ -460,7 +530,9 @@ func (u *runner) downloadFiles(ctx context.Context) error {
 
 		outputFileName := filepath.Clean(filepath.Join(temporaryDirectory, fileName))
 
-		outputFile, err := os.Create(outputFileName)
+		var outputFile *os.File
+
+		outputFile, err = os.Create(outputFileName)
 		if err != nil {
 			_ = response.Body.Close()
 
@@ -487,7 +559,7 @@ func (u *runner) updateFiles(ctx context.Context) error {
 	for fileName, downloadedFileName := range u.downloadedFiles {
 		logger.InfoKV(ctx, "Updating file", "file", fileName)
 
-		data, err := os.ReadFile(downloadedFileName) //nolint:gosec // Path constructed by us.
+		data, err := os.ReadFile(downloadedFileName)
 		if err != nil {
 			return err
 		}
@@ -499,13 +571,15 @@ func (u *runner) updateFiles(ctx context.Context) error {
 			return fmt.Errorf("checksum for %s: %w", downloadedFileName, errNoChecksum)
 		}
 
-		downloadedFileChecksum, err := base64.StdEncoding.DecodeString(downloadedFileBase64)
+		var downloadedFileChecksum []byte
+
+		downloadedFileChecksum, err = base64.StdEncoding.DecodeString(downloadedFileBase64)
 		if err != nil {
 			return err
 		}
 
-		if _, err := os.Stat(fileName); err != nil && os.IsNotExist(err) {
-			if _, err := os.Create(fileName); err != nil { //nolint:gosec // Controlled target path.
+		if _, err = os.Stat(fileName); err != nil && os.IsNotExist(err) {
+			if _, err = os.Create(fileName); err != nil {
 				return err
 			}
 		}
@@ -520,12 +594,12 @@ func (u *runner) updateFiles(ctx context.Context) error {
 		}
 
 		dataReader := bytes.NewReader(data)
-		if err := goupdate.Apply(dataReader, *options); err != nil {
+		if err = goupdate.Apply(dataReader, *options); err != nil {
 			return err
 		}
 
 		oldFileName := fileName + ".old"
-		if _, err := os.Stat(oldFileName); err == nil {
+		if _, err = os.Stat(oldFileName); err == nil {
 			_ = os.Remove(oldFileName)
 		}
 	}
@@ -549,9 +623,9 @@ func (u *runner) startRequiredExecutables(ctx context.Context) error {
 	osLC := strings.ToLower(runtime.GOOS)
 	switch {
 	case strings.Contains(osLC, "linux") || strings.Contains(osLC, "darwin"):
-		return exec.CommandContext(ctx, executable).Start() //nolint:gosec // Executable path from trusted manifest.
+		return exec.CommandContext(ctx, executable).Start()
 	case strings.Contains(osLC, "windows"):
-		return exec.CommandContext(ctx, "cmd.exe", "/C", "start", executable).Start() //nolint:gosec // Windows start.
+		return exec.CommandContext(ctx, "cmd.exe", "/C", "start", executable).Start()
 	default:
 		return fmt.Errorf("%s OS is not supported: %w", runtime.GOOS, errUnsupportedOS)
 	}

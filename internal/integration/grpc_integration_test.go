@@ -12,8 +12,8 @@ import (
 
 	"github.com/oshokin/alarm-button/internal/config"
 	pb "github.com/oshokin/alarm-button/internal/pb/v1"
-	common "github.com/oshokin/alarm-button/internal/service/common"
-	server "github.com/oshokin/alarm-button/internal/service/server"
+	"github.com/oshokin/alarm-button/internal/service/common"
+	"github.com/oshokin/alarm-button/internal/service/server"
 )
 
 // startGRPC starts a gRPC server with temporary config and persistent state file.
@@ -43,7 +43,7 @@ func startGRPC(t *testing.T, addr string, statePath string) (stop func()) {
 			StateFile:     statePath,
 		}
 
-		_ = server.Run(ctx, options)
+		_ = server.Run(ctx, options) //nolint:errcheck // Test code needs simple net.Listen for port allocation.
 	}()
 
 	// Wait briefly for server to start listening.
@@ -60,7 +60,7 @@ func TestGRPC_Roundtrip(t *testing.T) {
 	t.Parallel()
 
 	// Reserve a free port for the test server.
-	//nolint:noctx // Test code needs simple net.Listen for port allocation.
+
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 

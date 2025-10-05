@@ -60,11 +60,11 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(contents, &cfg); err != nil {
+	if err = yaml.Unmarshal(contents, &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal settings: %w", err)
 	}
 
-	if err := Validate(&cfg); err != nil {
+	if err = Validate(&cfg); err != nil {
 		return nil, err
 	}
 
@@ -91,7 +91,7 @@ func Save(path string, cfg *Config) error {
 	}
 
 	// Restrict permissions.
-	if err := os.WriteFile(filepath.Clean(path), data, DefaultFilePermissions); err != nil {
+	if err = os.WriteFile(filepath.Clean(path), data, DefaultFilePermissions); err != nil {
 		return fmt.Errorf("write settings: %w", err)
 	}
 

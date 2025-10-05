@@ -19,7 +19,7 @@ import (
 func TestPackager_WritesManifest(t *testing.T) {
 	// Setup test directory and change working directory.
 	dir := t.TempDir()
-	prev, _ := os.Getwd()
+	prev, _ := os.Getwd() //nolint:errcheck // Test code needs simple os.Getwd for directory change.
 
 	t.Chdir(dir)
 
@@ -36,7 +36,6 @@ func TestPackager_WritesManifest(t *testing.T) {
 
 	// Create placeholder files expected by packager.
 	for _, name := range upd.FilesWithChecksum() {
-		//nolint:gosec // File names are controlled test data.
 		f, err := os.Create(name)
 		require.NoError(t, err)
 
@@ -66,7 +65,6 @@ func TestPackager_WritesManifest(t *testing.T) {
 func reservePort(t *testing.T) string {
 	t.Helper()
 
-	//nolint:noctx // Test helper needs simple net.Listen for port allocation.
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 

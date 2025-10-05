@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/oshokin/alarm-button/internal/config"
-	client "github.com/oshokin/alarm-button/internal/service/client"
+	"github.com/oshokin/alarm-button/internal/service/client"
 	"github.com/oshokin/alarm-button/internal/version"
 )
 

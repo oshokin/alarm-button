@@ -11,7 +11,7 @@ import (
 	"github.com/oshokin/alarm-button/internal/config"
 	pb "github.com/oshokin/alarm-button/internal/pb/v1"
 	"github.com/oshokin/alarm-button/internal/service/checker"
-	common "github.com/oshokin/alarm-button/internal/service/common"
+	"github.com/oshokin/alarm-button/internal/service/common"
 )
 
 // TestChecker_PollsAndReturnsOnCancel runs the checker against a live server in Debug mode and cancels it.
