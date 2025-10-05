@@ -11,13 +11,8 @@ on:
     branches: [master]
   workflow_dispatch: {}
 
-# Environment variables (constants for versions and configuration).
+# Environment variables (constants for configuration).
 env:
-  # Action versions.
-  CHECKOUT_ACTION_VERSION: "v5"
-  SETUP_GO_ACTION_VERSION: "v6"
-  GORELEASER_ACTION_VERSION: "v6"
-  
   # Tool versions.
   GORELEASER_VERSION: "v2.12.3"
   GO_VERSION: "stable"
@@ -36,13 +31,13 @@ jobs:
     steps:
       # Check out repository with full Git history for version analysis.
       - name: Checkout
-        uses: actions/checkout@${{ env.CHECKOUT_ACTION_VERSION }}
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       # Set up Go environment for building release binaries.
       - name: Set up Go
-        uses: actions/setup-go@${{ env.SETUP_GO_ACTION_VERSION }}
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -92,7 +87,7 @@ jobs:
       # Run GoReleaser to build binaries and create GitHub release.
       - name: GoReleaser
         if: steps.bump.outputs.has_release == '1'
-        uses: goreleaser/goreleaser-action@${{ env.GORELEASER_ACTION_VERSION }}
+        uses: goreleaser/goreleaser-action@v6
         with:
           version: ${{ env.GORELEASER_VERSION }}
           args: release --clean

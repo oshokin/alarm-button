@@ -15,13 +15,8 @@ on:
   # Enable manually triggering this workflow via the API or web UI.
   workflow_dispatch:
 
-# Environment variables (constants for versions and configuration).
+# Environment variables (constants for configuration).
 env:
-  # Action versions.
-  CHECKOUT_ACTION_VERSION: "v5"
-  SETUP_GO_ACTION_VERSION: "v6"
-  GOLANGCI_LINT_ACTION_VERSION: "v8"
-  
   # Tool versions.
   GOLANGCI_LINT_VERSION: "v2.5.0"
   GO_VERSION: "1.25.x"
@@ -43,13 +38,13 @@ jobs:
     steps:
       # Checkout the repository code with full git history.
       - name: Checkout code
-        uses: actions/checkout@${{ env.CHECKOUT_ACTION_VERSION }}
+        uses: actions/checkout@v5
         with:
           # Fetch all commits and branches for complete history.
           fetch-depth: 0
       # Run golangci-lint to check code quality, style, and potential bugs.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@${{ env.GOLANGCI_LINT_ACTION_VERSION }}
+        uses: golangci/golangci-lint-action@v8
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
@@ -66,10 +61,10 @@ jobs:
     steps:
       # Checkout the repository code.
       - name: Checkout code
-        uses: actions/checkout@${{ env.CHECKOUT_ACTION_VERSION }}
+        uses: actions/checkout@v5
       # Install the Go version specified in the matrix.
       - name: Install Go ${{ matrix.go-version }}
-        uses: actions/setup-go@${{ env.SETUP_GO_ACTION_VERSION }}
+        uses: actions/setup-go@v6
         with:
           # Use the Go version from the matrix.
           go-version: ${{ matrix.go-version }}
@@ -96,10 +91,10 @@ jobs:
     steps:
       # Checkout the repository code.
       - name: Checkout code
-        uses: actions/checkout@${{ env.CHECKOUT_ACTION_VERSION }}
+        uses: actions/checkout@v5
       # Install Go for the build test.
       - name: Install Go
-        uses: actions/setup-go@${{ env.SETUP_GO_ACTION_VERSION }}
+        uses: actions/setup-go@v6
         with:
           # Use the configured Go version.
           go-version: ${{ env.GO_VERSION }}
