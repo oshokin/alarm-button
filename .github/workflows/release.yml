@@ -8,33 +8,47 @@ name: Release
 # Only master branch pushes should trigger releases in production.
 on:
   push:
-    branches: [master] # Automated releases on master branch pushes.
-  workflow_dispatch: {} # Allow manual release triggering when needed.
+    branches: [master]
+  workflow_dispatch: {}
+
+# Environment variables (constants for versions and configuration).
+env:
+  # Action versions.
+  CHECKOUT_ACTION_VERSION: "v5"
+  SETUP_GO_ACTION_VERSION: "v6"
+  GORELEASER_ACTION_VERSION: "v6"
+  
+  # Tool versions.
+  GORELEASER_VERSION: "v2.12.3"
+  GO_VERSION: "stable"
+  
+  # Git configuration for automated commits.
+  GIT_BOT_NAME: "github-actions[bot]"
+  GIT_BOT_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
 
 # Grant write permissions to create releases and push tags.
 permissions:
-  contents: write # Required to create releases and push Git tags.
+  contents: write
 
 jobs:
   release:
-    runs-on: ubuntu-latest # Use Ubuntu for consistent tooling environment.
+    runs-on: ubuntu-latest
     steps:
       # Check out repository with full Git history for version analysis.
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@${{ env.CHECKOUT_ACTION_VERSION }}
         with:
-          fetch-depth: 0 # Fetch all tags and history for semantic versioning.
+          fetch-depth: 0
 
       # Set up Go environment for building release binaries.
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@${{ env.SETUP_GO_ACTION_VERSION }}
         with:
-          go-version: "stable" # Use latest stable Go version.
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       # Analyze commit messages since last tag to determine version bump.
       # Uses the semver_next.sh script to implement semantic versioning logic.
-      # Fetch latest tags first to ensure accurate version calculation.
       - name: Compute next version
         id: bump
         run: |
@@ -43,7 +57,6 @@ jobs:
           bash scripts/semver_next.sh --emit-gh-output
 
       # Skip release if no commits found (should rarely happen).
-      # Note: All commits now trigger at least a patch release.
       - name: Skip if no commits
         if: steps.bump.outputs.has_release != '1'
         run: |
@@ -54,36 +67,34 @@ jobs:
       - name: Configure git
         if: steps.bump.outputs.has_release == '1'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "${{ env.GIT_BOT_NAME }}"
+          git config user.email "${{ env.GIT_BOT_EMAIL }}"
 
       # Create and push the new version tag to trigger GoReleaser.
       # Tag creation must happen before GoReleaser runs.
-      # Use atomic push to prevent race conditions with concurrent releases.
       - name: Create and push tag
         if: steps.bump.outputs.has_release == '1'
         run: |
           # Fetch latest tags to ensure we have the most recent state.
           git fetch --tags origin
-
+          
           # Re-check if our calculated tag already exists (race condition protection).
           if git rev-parse "${{ steps.bump.outputs.next_tag }}" >/dev/null 2>&1; then
             echo "Tag ${{ steps.bump.outputs.next_tag }} already exists! Another release beat us to it."
             echo "This is expected behavior with concurrent PRs. Skipping release."
             exit 0
           fi
-
+          
           # Create and push tag atomically.
           git tag "${{ steps.bump.outputs.next_tag }}"
           git push origin "${{ steps.bump.outputs.next_tag }}"
 
       # Run GoReleaser to build binaries and create GitHub release.
-      # Only executes if semantic commits were found requiring a release.
       - name: GoReleaser
         if: steps.bump.outputs.has_release == '1'
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@${{ env.GORELEASER_ACTION_VERSION }}
         with:
-          version: v2.12.3 # Pin to specific version to avoid warnings.
-          args: release --clean # Clean previous builds and create release.
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Token for GitHub API access.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
