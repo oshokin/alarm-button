@@ -15,7 +15,7 @@ on:
 # Environment variables (constants for configuration).
 env:
   # Tool versions.
-  GORELEASER_VERSION: "v2.12.3"
+  GORELEASER_VERSION: "latest"
   GO_VERSION: "stable"
 
   # Git configuration for automated commits.
