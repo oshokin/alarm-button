@@ -29,18 +29,17 @@ vars:
   # -------------------------------
 
   # Protocol Buffers compiler version (must be explicit version - protoc doesn't support 'latest' tag).
-  PROTOC_VERSION: "32.1"
+  PROTOC_VERSION: "36.2"
   # Release tag for Protocol Buffers compiler downloads.
   PROTOC_DOWNLOAD_TAG: "v{{.PROTOC_VERSION}}"
 
-  # These can use 'latest' since they're installed via go install.
   # Protobuf Go generator version.
-  PROTOC_GEN_GO_TAG: "latest"
+  PROTOC_GEN_GO_TAG: "v1.36.12"
   # gRPC Go generator version.
-  PROTOC_GEN_GO_GRPC_TAG: "latest"
+  PROTOC_GEN_GO_GRPC_TAG: "v1.6.2"
 
   # Platform-specific protoc zip filename.
-  PROTOC_ZIP: 'protoc-{{.PROTOC_VERSION}}-{{if eq OS "windows"}}win64{{else if eq OS "darwin"}}osx-x86_64{{else}}linux-x86_64{{end}}.zip'
+  PROTOC_ZIP: 'protoc-{{.PROTOC_VERSION}}-{{if eq OS "windows"}}win64{{else if eq OS "darwin"}}{{if eq ARCH "arm64"}}osx-aarch_64{{else}}osx-x86_64{{end}}{{else}}{{if eq ARCH "arm64"}}linux-aarch_64{{else}}linux-x86_64{{end}}{{end}}.zip'
   # Full path to download protoc zip (different locations for Windows vs Unix).
   PROTOC_ZIP_FULL_PATH: '{{if eq OS "windows"}}{{.LOCAL_BIN}}{{.PS}}{{.PROTOC_ZIP}}{{else}}{{.PS}}tmp{{.PS}}{{.PROTOC_ZIP}}{{end}}'
   # URL to download protoc from GitHub releases.
@@ -58,10 +57,12 @@ vars:
   # Tool Versions
   # -------------------------------
 
-  # Go imports tool (version can be 'latest' since installed via go install).
-  GOIMPORTS_TAG: "latest"
+  # Go imports tool version.
+  GOIMPORTS_TAG: "v0.50.0"
+  # Vulnerability scanner version.
+  GOVULNCHECK_TAG: "v1.8.0"
   # Linting tool version.
-  GOLANGCI_TAG: "latest"
+  GOLANGCI_VERSION: "2.13.2"
 
   # -------------------------------
   # Tool Binaries
@@ -69,6 +70,7 @@ vars:
 
   GOIMPORTS_BIN: "{{.LOCAL_BIN}}{{.PS}}goimports{{exeExt}}"
   GOLANGCI_BIN: "{{.LOCAL_BIN}}{{.PS}}golangci-lint{{exeExt}}"
+  GOVULNCHECK_BIN: "{{.LOCAL_BIN}}{{.PS}}govulncheck{{exeExt}}"
 
   # -------------------------------
   # Version Detection
@@ -139,107 +141,110 @@ tasks:
     deps: [_ensure-bin]
     cmds:
       - |
-        # Only install if current version doesn't match desired version.
-        {{if (not (eq .PROTOC_CURRENT_TAG .PROTOC_VERSION))}}
-          echo "Installing protoc, version: {{.PROTOC_VERSION}}..."
-          {{if eq OS "windows"}}
-            # Windows-specific download and extraction.
-            curl -fSL -o "{{.PROTOC_ZIP_FULL_PATH}}" "{{.PROTOC_URL}}"
-            powershell Expand-Archive -Path "{{.PROTOC_ZIP_FULL_PATH}}" -DestinationPath "{{.LOCAL_BIN}}" -Force
-          {{else}}
-            # Unix/Mac download and extraction.
-            curl -fSL -o {{.PROTOC_ZIP_FULL_PATH}} "{{.PROTOC_URL}}"
-            unzip -o {{.PROTOC_ZIP_FULL_PATH}} -d "{{.LOCAL_BIN}}"
-            chmod +x "{{.PROTOC_BIN_IN_ZIP}}"
-          {{end}}
-          # Cleanup temporary files.
-          {{.RMRF}} "{{.PROTOC_ZIP_FULL_PATH}}"{{.RMRF_END}}
-          # Move binary to final location.
-          {{if eq OS "windows"}}
-            powershell Move-Item -Force "{{.PROTOC_BIN_IN_ZIP}}" "{{.PROTOC_BIN}}"
-          {{else}}
-            mv "{{.PROTOC_BIN_IN_ZIP}}" "{{.PROTOC_BIN}}"
-          {{end}}
-          # Remove unnecessary extracted files.
-          {{.RMRF}} "{{.LOCAL_BIN}}{{.PS}}bin"{{.RMRF_END}}
-          {{.RMRF}} "{{.LOCAL_BIN}}{{.PS}}readme.txt"{{.RMRF_END}}
+        {{if eq OS "windows"}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/install-protoc.ps1
+        {{else}}
+          bash scripts/install-protoc.sh
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
+      PROTOC_CURRENT_TAG: "{{.PROTOC_CURRENT_TAG}}"
+      PROTOC_VERSION: "{{.PROTOC_VERSION}}"
+      PROTOC_ZIP: "{{.PROTOC_ZIP}}"
+      PROTOC_URL: "{{.PROTOC_URL}}"
+      PROTOC_ZIP_FULL_PATH: "{{.PROTOC_ZIP_FULL_PATH}}"
+      LOCAL_BIN: "{{.LOCAL_BIN}}"
+      PROTOC_BIN: "{{.PROTOC_BIN}}"
+      PROTOC_BIN_IN_ZIP: "{{.PROTOC_BIN_IN_ZIP}}"
 
   install-protoc-gen-go:
     desc: "Install protoc-gen-go plugin into ./bin"
     deps: [_ensure-bin]
     cmds:
       - |
-        {{if (not (eq .PROTOC_GEN_GO_CURRENT_TAG .PROTOC_GEN_GO_TAG))}}
-          echo "Installing protoc-gen-go, version: {{.PROTOC_GEN_GO_TAG}}..."
-          {{if eq OS "windows"}}
-            powershell.exe -Command "\$env:GOBIN = '{{.LOCAL_BIN}}'; go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_TAG}}"
-          {{else}}
-            go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_TAG}}
-          {{end}}
+        {{if eq OS "windows"}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/install-protoc-gen-go.ps1
+        {{else}}
+          bash scripts/install-protoc-gen-go.sh
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
+      LOCAL_BIN: "{{.LOCAL_BIN}}"
+      PROTOC_GEN_GO_TAG: "{{.PROTOC_GEN_GO_TAG}}"
+      PROTOC_GEN_GO_CURRENT_TAG: "{{.PROTOC_GEN_GO_CURRENT_TAG}}"
 
   install-protoc-gen-go-grpc:
     desc: "Install protoc-gen-go-grpc plugin into ./bin"
     deps: [_ensure-bin]
     cmds:
       - |
-        {{if (not (eq .PROTOC_GEN_GO_GRPC_CURRENT_TAG .PROTOC_GEN_GO_GRPC_TAG))}}
-          echo "Installing protoc-gen-go-grpc, version: {{.PROTOC_GEN_GO_GRPC_TAG}}..."
-          {{if eq OS "windows"}}
-            powershell.exe -Command "\$env:GOBIN = '{{.LOCAL_BIN}}'; go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_TAG}}"
-          {{else}}
-            go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_TAG}}
-          {{end}}
+        {{if eq OS "windows"}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/install-protoc-gen-go-grpc.ps1
+        {{else}}
+          bash scripts/install-protoc-gen-go-grpc.sh
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
+      LOCAL_BIN: "{{.LOCAL_BIN}}"
+      PROTOC_GEN_GO_GRPC_TAG: "{{.PROTOC_GEN_GO_GRPC_TAG}}"
+      PROTOC_GEN_GO_GRPC_CURRENT_TAG: "{{.PROTOC_GEN_GO_GRPC_CURRENT_TAG}}"
 
   _install-goimports:
     internal: true
     deps: [_ensure-bin]
     cmds:
       - |
-        {{if (not (eq .GOIMPORTS_CURRENT_TAG .GOIMPORTS_TAG))}}
-          echo "Installing goimports, version: {{.GOIMPORTS_TAG}}..."
-          {{if eq OS "windows"}}
-            powershell.exe -Command "\$env:GOBIN = '{{.LOCAL_BIN}}'; go install golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_TAG}}"
-          {{else}}
-            go install golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_TAG}}
-          {{end}}
+        {{if eq OS "windows"}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/install-goimports.ps1
+        {{else}}
+          bash scripts/install-goimports.sh
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
+      LOCAL_BIN: "{{.LOCAL_BIN}}"
+      GOIMPORTS_TAG: "{{.GOIMPORTS_TAG}}"
+      GOIMPORTS_CURRENT_TAG: "{{.GOIMPORTS_CURRENT_TAG}}"
+
+  _install-govulncheck:
+    internal: true
+    deps: [_ensure-bin]
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/install-govulncheck.ps1
+        {{else}}
+          bash scripts/install-govulncheck.sh
+        {{end}}
+    env:
+      GOBIN: "{{.LOCAL_BIN}}"
+      LOCAL_BIN: "{{.LOCAL_BIN}}"
+      GOVULNCHECK_TAG: "{{.GOVULNCHECK_TAG}}"
 
   install-lint:
     desc: "Install golangci-lint into ./bin"
     deps: [_ensure-bin]
     cmds:
       - |
-        # Only install if current version doesn't match desired version.
-        {{if (not (eq .GOLANGCI_CURRENT_TAG .GOLANGCI_TAG))}}
-          echo "Installing golangci-lint, version: {{.GOLANGCI_TAG}}..."
-          {{if eq OS "windows"}}
-            powershell.exe -Command "\$env:GOBIN = '{{.LOCAL_BIN}}'; go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_TAG}}"
-          {{else}}
-            go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_TAG}}
-          {{end}}
+        {{if eq OS "windows"}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/install-golangci-lint.ps1
+        {{else}}
+          bash scripts/install-golangci-lint.sh
         {{end}}
     env:
       GOBIN: "{{.LOCAL_BIN}}"
+      GOLANGCI_CURRENT_TAG: "{{.GOLANGCI_CURRENT_TAG}}"
+      GOLANGCI_VERSION: "{{.GOLANGCI_VERSION}}"
+      GOLANGCI_BIN: "{{.GOLANGCI_BIN}}"
 
   install-tools:
-    desc: "Install all development tools (golangci-lint, protoc, protoc-gen-go, protoc-gen-go-grpc, goimports)"
+    desc: "Install all development tools (golangci-lint, protoc, generators, goimports, govulncheck)"
     deps: 
       - install-lint
       - install-protoc
       - install-protoc-gen-go
       - install-protoc-gen-go-grpc
       - _install-goimports
+      - _install-govulncheck
 
   # -------------------------------
   # Git Hooks
@@ -277,18 +282,16 @@ tasks:
       - install-protoc-gen-go-grpc
       - _install-goimports
     cmds:
-      - echo "Generating protobuf code..."
-      - '{{.MKDIR}} internal/pb{{.MKDIR_END}}'
       - |
         {{if eq OS "windows"}}
-          powershell.exe -Command "\$env:PATH = '{{.LOCAL_BIN}};' + \$env:PATH; & '{{.PROTOC_BIN}}' --go_out=internal/pb --go_opt=paths=source_relative --go-grpc_out=internal/pb --go-grpc_opt=paths=source_relative --proto_path={{.LOCAL_BIN}}{{.PS}}include --proto_path=api api/v1/*.proto"
+          powershell.exe -ExecutionPolicy Bypass -File scripts/generate-protobuf.ps1
         {{else}}
-          PATH="{{.LOCAL_BIN}}:$PATH" "{{.PROTOC_BIN}}" --go_out=internal/pb --go_opt=paths=source_relative --go-grpc_out=internal/pb --go-grpc_opt=paths=source_relative --proto_path={{.LOCAL_BIN}}{{.PS}}include --proto_path=api api/v1/*.proto
+          bash scripts/generate-protobuf.sh
         {{end}}
-      - go mod tidy
-      - echo "Formatting generated code..."
-      - '"{{.GOIMPORTS_BIN}}" -w ./'
-      - echo "Protobuf generation completed successfully!"
+    env:
+      LOCAL_BIN: "{{.LOCAL_BIN}}"
+      PROTOC_BIN: "{{.PROTOC_BIN}}"
+      GOIMPORTS_BIN: "{{.GOIMPORTS_BIN}}"
 
   # -------------------------------
   # Code Quality
@@ -307,6 +310,19 @@ tasks:
     cmds:
       - '"{{.GOLANGCI_BIN}}" config verify'
       - '"{{.GOLANGCI_BIN}}" run'
+
+  security:
+    desc: "Run govulncheck over the full module"
+    deps: [_install-govulncheck]
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/run-govulncheck.ps1
+        {{else}}
+          bash scripts/run-govulncheck.sh
+        {{end}}
+    env:
+      GOVULNCHECK_BIN: "{{.GOVULNCHECK_BIN}}"
 
   # -------------------------------
   # Testing
@@ -341,9 +357,9 @@ tasks:
       - '{{.MKDIR}} ''{{.LOCAL_BIN}}''{{.MKDIR_END}}'
       - |
         {{if eq OS "windows"}}
-          powershell.exe -ExecutionPolicy Bypass -File scripts/build.ps1 -LocalBin "{{.LOCAL_BIN}}" -CmdDir "{{.CMD_DIR}}" -TaskfileDir "{{.TASKFILE_DIR}}" -Binaries {{range $i, $binary := .BINARIES}}{{if $i}},{{end}}"{{$binary}}"{{end}}
+          powershell.exe -ExecutionPolicy Bypass -File scripts/build-binaries.ps1 -LocalBin "{{.LOCAL_BIN}}" -CmdDir "{{.CMD_DIR}}" -TaskfileDir "{{.TASKFILE_DIR}}" -Binaries {{range $i, $binary := .BINARIES}}{{if $i}},{{end}}"{{$binary}}"{{end}}
         {{else}}
-          bash scripts/build.sh "{{.LOCAL_BIN}}" "{{.CMD_DIR}}" "{{.TASKFILE_DIR}}" {{range .BINARIES}}"{{.}}" {{end}}
+          bash scripts/build-binaries.sh "{{.LOCAL_BIN}}" "{{.CMD_DIR}}" "{{.TASKFILE_DIR}}" {{range .BINARIES}}"{{.}}" {{end}}
         {{end}}
 
   # -------------------------------

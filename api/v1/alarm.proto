@@ -4,7 +4,7 @@ package alarm.button;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/oshokin/alarm-button/api/v1;alarm";
+option go_package = "github.com/oshokin/alarm-button/internal/pb/v1;alarm";
 
 // AlarmService defines the core operations for the alarm button system.
 // This service handles both alarm activation/deactivation and status checks.

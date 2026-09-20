@@ -6,11 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
-	"strings"
 )
-
-// windowsShutdownTimeout is the delay in seconds for Windows shutdown command.
-const windowsShutdownTimeout = "0"
 
 // ErrUnsupportedOS indicates the current OS is not supported for shutdown.
 var ErrUnsupportedOS = errors.New("unsupported operating system")
@@ -20,14 +16,27 @@ var ErrUnsupportedOS = errors.New("unsupported operating system")
 // - Windows:     `shutdown.exe -s -f -t 0` (force, no delay)
 // The commands are started asynchronously; the OS takes over the rest.
 func Shutdown(ctx context.Context) error {
-	osName := strings.ToLower(runtime.GOOS)
+	name, args, err := shutdownCommand(runtime.GOOS)
+	if err != nil {
+		return err
+	}
 
-	switch {
-	case strings.Contains(osName, "linux") || strings.Contains(osName, "darwin"):
-		return exec.CommandContext(ctx, "shutdown", "-h", "now").Start()
-	case strings.Contains(osName, "windows"):
-		return exec.CommandContext(ctx, "shutdown.exe", "-s", "-f", "-t", windowsShutdownTimeout).Start()
+	err = exec.CommandContext(ctx, name, args...).Start()
+	if err != nil {
+		return fmt.Errorf("start shutdown command: %w", err)
+	}
+
+	return nil
+}
+
+// shutdownCommand resolves shutdown executable and arguments for target OS.
+func shutdownCommand(goos string) (name string, args []string, err error) {
+	switch goos {
+	case "linux", "darwin":
+		return "shutdown", []string{"-h", "now"}, nil
+	case "windows":
+		return "shutdown.exe", []string{"-s", "-f", "-t", "0"}, nil
 	default:
-		return fmt.Errorf("unsupported operating system: %s: %w", runtime.GOOS, ErrUnsupportedOS)
+		return "", nil, fmt.Errorf("%s: %w", goos, ErrUnsupportedOS)
 	}
 }

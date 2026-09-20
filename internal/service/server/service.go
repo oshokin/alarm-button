@@ -21,6 +21,8 @@ type service struct {
 	state *domain.State
 	// mu protects concurrent access to the alarm state.
 	mu sync.RWMutex
+	// now is injected for deterministic tests.
+	now func() time.Time
 }
 
 // newService creates a service backed by the provided repository.
@@ -31,6 +33,7 @@ func newService(ctx context.Context, repository repo.Repository) (*service, erro
 			Timestamp: time.Now(),
 			IsEnabled: false,
 		},
+		now: time.Now,
 	}
 
 	if repository == nil {
@@ -57,23 +60,32 @@ func (s *service) SetAlarmState(ctx context.Context, actor *domain.Actor, isEnab
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.state = &domain.State{
-		Timestamp: time.Now(),
+	next := &domain.State{
+		Timestamp: s.now(),
 		LastActor: actor.Clone(),
 		IsEnabled: isEnabled,
 	}
 
 	if s.repo != nil {
-		if err := s.repo.Save(ctx, s.state); err != nil {
-			logger.Errorf(ctx, "Failed to persist alarm state: %v", err)
-
+		if err := s.repo.Save(ctx, next); err != nil {
+			logger.ErrorKV(ctx, "Failed to persist alarm state", "error", err)
 			return nil, fmt.Errorf("persist state: %w", err)
 		}
 	}
 
-	logger.InfoKV(ctx, "Alarm state updated", "is_enabled", s.state.IsEnabled, "actor", s.state.LastActor)
+	s.state = next
+	logger.InfoKV(
+		ctx,
+		"Alarm state updated",
+		"is_enabled",
+		next.IsEnabled,
+		"actor",
+		next.LastActor.String(),
+		"timestamp",
+		next.Timestamp.UTC().Format(time.RFC3339Nano),
+	)
 
-	result := s.state.Clone()
+	result := next.Clone()
 
 	return result, nil
 }
@@ -83,7 +95,16 @@ func (s *service) GetAlarmState(ctx context.Context) *domain.State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	logger.Info(ctx, "Alarm state requested", "is_enabled", s.state.IsEnabled, "actor", s.state.LastActor)
+	logger.InfoKV(
+		ctx,
+		"Alarm state requested",
+		"is_enabled",
+		s.state.IsEnabled,
+		"actor",
+		s.state.LastActor.String(),
+		"timestamp",
+		s.state.Timestamp.UTC().Format(time.RFC3339Nano),
+	)
 
 	result := s.state.Clone()
 

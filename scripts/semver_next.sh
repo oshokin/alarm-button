@@ -42,7 +42,7 @@ fi
 # Function to normalize version strings by removing 'v' prefix if present.
 # This ensures consistent version parsing regardless of tag format.
 normalize_version() {
-  echo "$1" | sed 's/^v//'
+  printf '%s\n' "${1#v}"
 }
 
 # Get the normalized current version for processing.
@@ -53,7 +53,7 @@ if $found_tag; then
   # If tag exists, analyze commits since that tag to HEAD.
   range="${last_tag}..HEAD"
   # Collect commit subjects since the last tag.
-  mapfile -t subjects < <(git log --format=%s ${range})
+  mapfile -t subjects < <(git log --format=%s "$range")
 else
   # If no tag exists, analyze all commits in current branch.
   # Use git rev-list to avoid invalid range issues.
@@ -64,22 +64,34 @@ fi
 # Enable case-insensitive matching for commit message analysis.
 shopt -s nocasematch
 
+# Define commit prefix patterns.
+# Keep regular expressions in variables to avoid parser issues with
+# parenthesized optional scope markers in [[ ... =~ ... ]] expressions.
+major_pattern='^major(\([^)]+\))?:'
+feat_pattern='^feat(\([^)]+\))?:'
+fix_pattern='^fix(\([^)]+\))?:'
+
 # Check for version bump type with precedence: major > feat > fix.
-# Default to patch for any commits (even non-semantic ones).
-bump="patch"
+# Default to no bump when there are no commits in the analyzed range.
+bump="none"
+if (( ${#subjects[@]} > 0 )); then
+  bump="patch"
+fi
 
 # First pass: check for major version bump (breaking changes).
-for s in "${subjects[@]}"; do
-  if [[ $s =~ ^major: ]]; then 
-    bump="major"
-    break  # Major takes highest precedence, stop searching.
-  fi
-done
+if [[ "$bump" != "none" ]]; then
+  for s in "${subjects[@]}"; do
+    if [[ $s =~ $major_pattern ]]; then
+      bump="major"
+      break  # Major takes highest precedence, stop searching.
+    fi
+  done
+fi
 
 # Second pass: check for minor version bump (new features) if no major found.
 if [[ $bump == "patch" ]]; then
   for s in "${subjects[@]}"; do
-    if [[ $s =~ ^feat: ]]; then 
+    if [[ $s =~ $feat_pattern ]]; then
       bump="minor"
       break  # Minor found, stop searching.
     fi
@@ -90,7 +102,7 @@ fi
 # Note: We already default to patch, so this preserves explicit fix: commits.
 if [[ $bump == "patch" ]]; then
   for s in "${subjects[@]}"; do
-    if [[ $s =~ ^fix: ]]; then 
+    if [[ $s =~ $fix_pattern ]]; then
       bump="patch"
       break  # Explicit patch found, maintain patch.
     fi

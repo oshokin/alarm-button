@@ -1,39 +1,47 @@
 package cmd
 
 import (
-	"context"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
-	"github.com/oshokin/alarm-button/internal/config"
 	"github.com/oshokin/alarm-button/internal/service/packager"
 	"github.com/oshokin/alarm-button/internal/version"
 )
 
+// CLI globals hold packager flags and root command wiring.
 var (
-	// configPath to the configuration YAML file.
-	configPath string
+	inputDir   string
+	outputDir  string
+	releaseVer string
+	privateKey string
+	targetGOOS string
+	targetARCH string
 
-	// rootCmd represents the base command for preparing update metadata.
+	clientConfig         string
+	clientConfigRevision uint64
+	serverConfig         string
+	serverConfigRevision uint64
+	signingKeyID         string
+
 	rootCmd = &cobra.Command{
-		Use:   "alarm-packager [server-socket] [update-folder]",
-		Short: "Prepare update metadata for distribution",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
-			// Setup graceful shutdown handling.
-			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-			defer stop()
-
-			options := &packager.Options{
-				ConfigPath:    configPath,
-				ServerAddress: args[0],
-				UpdateFolder:  args[1],
-			}
-
-			return packager.Run(ctx, options)
+		Use:   "alarm-packager",
+		Short: "Build signed update manifest and artifacts",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return packager.Run(&packager.Options{
+				InputDir:             inputDir,
+				OutputDir:            outputDir,
+				Version:              releaseVer,
+				SigningKey:           privateKey,
+				GOOS:                 targetGOOS,
+				GOARCH:               targetARCH,
+				ClientConfig:         clientConfig,
+				ClientConfigRevision: clientConfigRevision,
+				ServerConfig:         serverConfig,
+				ServerConfigRevision: serverConfigRevision,
+				KeyID:                signingKeyID,
+			})
 		},
 	}
 )
@@ -49,6 +57,31 @@ func Execute() {
 
 //nolint:gochecknoinits // Required by Cobra CLI framework architecture.
 func init() {
-	// Setup command flags with consistent naming and descriptions.
-	rootCmd.Flags().StringVarP(&configPath, "config", "c", config.DefaultConfigFilename, "path to configuration file")
+	rootCmd.AddCommand(newKeygenCommand())
+
+	rootCmd.Flags().StringVar(&inputDir, "input-dir", "", "directory with built binaries for target platform")
+	rootCmd.Flags().StringVar(&outputDir, "output-dir", "", "directory to place signed manifest and artifacts")
+	rootCmd.Flags().StringVar(&releaseVer, "version", "", "release semantic version (e.g. 1.8.0)")
+	rootCmd.Flags().StringVar(&privateKey, "private-key", "", "path to Ed25519 private key in PKCS8 PEM")
+	rootCmd.Flags().StringVar(&targetGOOS, "goos", "", "target GOOS (default current GOOS)")
+	rootCmd.Flags().StringVar(&targetARCH, "goarch", "", "target GOARCH (default current GOARCH)")
+	rootCmd.Flags().
+		StringVar(&clientConfig, "client-config", "", "path to client config YAML for centralized deployment")
+	rootCmd.Flags().Uint64Var(&clientConfigRevision, "client-config-revision", 0, "client config revision")
+	rootCmd.Flags().
+		StringVar(&serverConfig, "server-config", "", "path to server config YAML for centralized deployment")
+	rootCmd.Flags().Uint64Var(&serverConfigRevision, "server-config-revision", 0, "server config revision")
+	rootCmd.Flags().StringVar(&signingKeyID, "key-id", "", "manifest signing key identifier")
+
+	mustMarkFlagRequired("output-dir")
+	mustMarkFlagRequired("version")
+	mustMarkFlagRequired("private-key")
+	mustMarkFlagRequired("key-id")
+}
+
+// mustMarkFlagRequired marks flag required and panics on Cobra wiring errors.
+func mustMarkFlagRequired(name string) {
+	if err := rootCmd.MarkFlagRequired(name); err != nil {
+		panic(err)
+	}
 }

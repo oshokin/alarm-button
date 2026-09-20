@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/oshokin/alarm-button/internal/config"
 	"github.com/oshokin/alarm-button/internal/logger"
 	pb "github.com/oshokin/alarm-button/internal/pb/v1"
+	"github.com/oshokin/alarm-button/internal/proc"
 	"github.com/oshokin/alarm-button/internal/service/common"
 	"github.com/oshokin/alarm-button/internal/service/power"
 )
@@ -25,6 +28,8 @@ type Options struct {
 	Timeout time.Duration
 	// Debug prevents shutdown when the alarm is enabled for testing purposes.
 	Debug bool
+	// PIDFile specifies the path to write current checker PID.
+	PIDFile string
 }
 
 // DefaultPollInterval defines the fixed polling interval for alarm state checks.
@@ -36,69 +41,118 @@ var errShutdownInitiated = errors.New("shutdown initiated")
 // Run polls alarm state and optionally triggers shutdown when enabled.
 // Loads configuration first to get timeout, uses default interval, and monitors alarm state.
 //
-//nolint:cyclop // Flow is straightforward and readable; splitting would reduce clarity.
+//nolint:cyclop // Linear orchestration with explicit error handling is clearer as one flow.
 func Run(ctx context.Context, opts *Options) error {
-	// Set context with logger name for tracking.
 	ctx = logger.WithName(ctx, "alarm-checker")
 
-	// Load settings from configuration file.
-	cfg, err := config.Load(opts.ConfigPath)
+	cfg, serverAddress, timeout, pollInterval, err := resolveCheckerRunSettings(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("load configuration: %w", err)
+		return err
 	}
 
-	// Use default polling interval as it's not user-configurable.
-	if opts.PollInterval <= 0 {
-		opts.PollInterval = DefaultPollInterval
+	pidFilePath, err := resolvePIDFilePath(opts.PIDFile)
+	if err != nil {
+		return err
 	}
 
-	// Determine server address: command line argument overrides config.
-	serverAddress := cfg.ServerAddress
-	if opts.ServerAddress != "" {
-		serverAddress = opts.ServerAddress
+	err = proc.Write(pidFilePath, os.Getpid())
+	if err != nil {
+		return fmt.Errorf("write pid file: %w", err)
 	}
+	defer func() {
+		releaseErr := proc.RemoveIfOwned(pidFilePath, os.Getpid())
+		if releaseErr != nil {
+			logger.ErrorKV(ctx, "Failed to remove pid file", "path", pidFilePath, "error", releaseErr)
+		}
+	}()
 
-	// Detect current system actor for audit logging.
 	actor, err := common.DetectActor()
 	if err != nil {
 		return fmt.Errorf("detect actor: %w", err)
 	}
 
-	// Establish gRPC connection with timeout from configuration.
-	client, err := common.Dial(ctx, serverAddress, common.WithCallTimeout(cfg.Timeout))
+	client, err := common.NewClient(serverAddress, cfg, common.WithCallTimeout(timeout))
 	if err != nil {
 		return fmt.Errorf("dial server: %w", err)
 	}
 
-	// Ensure connection cleanup on function exit.
 	defer func() {
 		_ = client.Close()
 	}()
 
-	logger.InfoKV(ctx, "Polling alarm state", "server_address", serverAddress, "interval", opts.PollInterval.String())
+	logger.InfoKV(ctx, "Polling alarm state", "server_address", serverAddress, "interval", pollInterval.String())
 
-	// Setup polling ticker with fixed interval.
-	ticker := time.NewTicker(opts.PollInterval)
+	initialErr := checkState(ctx, client, actor, opts.Debug)
+	if initialErr != nil {
+		if errors.Is(initialErr, errShutdownInitiated) {
+			logger.Info(ctx, "Shutdown initiated, exiting")
+			return nil
+		}
+
+		logger.ErrorKV(ctx, "Initial state check failed", "error", initialErr)
+	}
+
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
-	// Main polling loop until context cancellation or shutdown.
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Info(ctx, "Context canceled, exiting")
 			return nil
 		case <-ticker.C:
-			// Check alarm state and handle shutdown if needed.
-			if err = checkState(ctx, client, actor, opts.Debug); err != nil {
-				if errors.Is(err, errShutdownInitiated) {
+			checkErr := checkState(ctx, client, actor, opts.Debug)
+			if checkErr != nil {
+				if errors.Is(checkErr, errShutdownInitiated) {
 					logger.Info(ctx, "Shutdown initiated, exiting")
 					return nil
 				}
 
-				logger.ErrorKV(ctx, "Check state failed", "error", err)
+				logger.ErrorKV(ctx, "Check state failed", "error", checkErr)
 			}
 		}
 	}
+}
+
+// resolveCheckerRunSettings resolves config, addresses, timeout, and polling interval.
+func resolveCheckerRunSettings(
+	ctx context.Context,
+	opts *Options,
+) (*config.Config, string, time.Duration, time.Duration, error) {
+	if opts == nil {
+		opts = &Options{}
+	}
+
+	cfg, err := config.Load(opts.ConfigPath)
+	if err != nil {
+		return nil, "", 0, 0, fmt.Errorf("load configuration: %w", err)
+	}
+
+	pollInterval := opts.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = DefaultPollInterval
+	}
+
+	serverAddress := cfg.ServerAddress
+	if opts.ServerAddress != "" {
+		serverAddress = opts.ServerAddress
+	}
+
+	if !cfg.TLS.Enabled && cfg.AllowInsecureRemote && !common.IsLoopbackAddress(serverAddress) {
+		logger.WarnKV(
+			ctx,
+			"Insecure remote gRPC is explicitly enabled",
+			"server_address",
+			serverAddress,
+		)
+	}
+
+	timeout := cfg.Timeout
+	if opts.Timeout > 0 {
+		timeout = opts.Timeout
+	}
+
+	return cfg, serverAddress, timeout, pollInterval, nil
 }
 
 // checkState retrieves and processes the current alarm state from the server.
@@ -117,8 +171,8 @@ func checkState(ctx context.Context, client *common.Client, actor *pb.SystemActo
 		status = "enabled"
 	}
 
-	// Extract timestamp with fallback to current time.
-	timestamp := time.Now().Format(time.RFC3339)
+	// Extract timestamp with fallback marker.
+	timestamp := "<unknown>"
 	if ts := state.GetTimestamp(); ts != nil {
 		timestamp = ts.AsTime().Format(time.RFC3339)
 	}
@@ -143,4 +197,37 @@ func checkState(ctx context.Context, client *common.Client, actor *pb.SystemActo
 	}
 
 	return errShutdownInitiated
+}
+
+// resolvePIDFilePath resolves checker PID file path from override or executable path.
+func resolvePIDFilePath(override string) (string, error) {
+	if override != "" {
+		if filepath.IsAbs(override) {
+			return filepath.Clean(override), nil
+		}
+
+		absPath, err := filepath.Abs(override)
+		if err != nil {
+			return "", fmt.Errorf("resolve pid file path: %w", err)
+		}
+
+		return filepath.Clean(absPath), nil
+	}
+
+	executablePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path for pid file: %w", err)
+	}
+
+	resolvedPath, err := filepath.EvalSymlinks(executablePath)
+	if err != nil {
+		resolvedPath = executablePath
+	}
+
+	pidPath, err := proc.DefaultPath(resolvedPath)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Clean(pidPath), nil
 }

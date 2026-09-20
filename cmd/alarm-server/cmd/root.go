@@ -13,11 +13,14 @@ import (
 	"github.com/oshokin/alarm-button/internal/version"
 )
 
+// CLI globals hold flags and root command wiring.
 var (
 	// configPath to the configuration YAML file.
 	configPath string
 	// stateFile path where alarm state is persisted.
 	stateFile string
+	// pidFile path where server writes own process identifier.
+	pidFile string
 
 	// rootCmd represents the base command for running the gRPC server.
 	rootCmd = &cobra.Command{
@@ -25,8 +28,7 @@ var (
 		Short: "Run the alarm gRPC server and manage alarm state.",
 		Long: `Starts the gRPC alarm server that manages alarm state and handles client requests.
 
-The server listens on the specified address or uses settings from configuration file.
-Only the port from ServerAddress config is used for listening (e.g., :8080).
+The server listens on the configured listen_addr value by default.
 Listen address can be provided as argument to override config (e.g., :9090, 0.0.0.0:8080).
 Alarm state is persisted to JSON file for recovery across restarts.`,
 		Args: cobra.MaximumNArgs(1),
@@ -45,6 +47,7 @@ Alarm state is persisted to JSON file for recovery across restarts.`,
 				ConfigPath:    configPath,
 				ListenAddress: listenAddress,
 				StateFile:     stateFile,
+				PIDFile:       pidFile,
 			}
 
 			return server.Run(ctx, options)
@@ -66,5 +69,12 @@ func init() {
 	// Setup command flags with consistent naming and descriptions.
 	rootCmd.Flags().StringVarP(&configPath, "config", "c", config.DefaultConfigFilename, "path to configuration file")
 	rootCmd.Flags().
-		StringVarP(&stateFile, "state-file", "s", config.DefaultStateFilename, "path to persist alarm state")
+		StringVarP(
+			&stateFile,
+			"state-file",
+			"s",
+			"",
+			"path to persist alarm state; empty uses state_file from configuration",
+		)
+	rootCmd.Flags().StringVar(&pidFile, "pid-file", "", "path to server pid file; empty uses executable directory")
 }

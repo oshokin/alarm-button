@@ -19,16 +19,15 @@ func TestChecker_PollsAndReturnsOnCancel(t *testing.T) {
 	t.Parallel()
 
 	// Setup test environment with server and temporary state.
-	addr := reservePort(t)
 	statePath := filepath.Join(t.TempDir(), "state.json")
 
-	stop := startGRPC(t, addr, statePath)
+	addr, stop := startGRPC(t, statePath)
 	defer stop()
 
 	ctx := context.Background()
 
 	// Connect to the test server.
-	c, err := common.Dial(ctx, addr)
+	c, err := common.NewClient(addr, &config.Config{})
 	require.NoError(t, err)
 
 	defer func() {
@@ -52,7 +51,6 @@ func TestChecker_PollsAndReturnsOnCancel(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "checker-settings.yaml")
 	err = config.Save(cfgPath, &config.Config{
 		ServerAddress: addr,
-		Timeout:       1 * time.Second,
 	})
 	require.NoError(t, err)
 
@@ -61,15 +59,13 @@ func TestChecker_PollsAndReturnsOnCancel(t *testing.T) {
 		options := &checker.Options{
 			ConfigPath:    cfgPath,
 			ServerAddress: addr, // Override config address
-			PollInterval:  50 * time.Millisecond,
+			PollInterval:  20 * time.Millisecond,
 			Debug:         true,
 		}
 
 		done <- checker.Run(runCtx, options)
 	}()
 
-	// Wait for checker to start polling, then cancel.
-	time.Sleep(120 * time.Millisecond)
 	cancel()
 
 	// Verify checker exits cleanly on cancellation.

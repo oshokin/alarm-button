@@ -12,6 +12,10 @@ updates:
     labels:
       - "github-actions dependencies" # Apply a label to dependency update PRs for GitHub Actions.
     open-pull-requests-limit: 1 # Limit the number of open PRs to 1 at a time.
+    groups:
+      actions:
+        patterns:
+          - "*" # Group all GitHub Actions updates into a single PR.
 
   # Configuration for updating Go module dependencies.
   - package-ecosystem: "gomod" # Specifies the package ecosystem (Go modules).
@@ -24,3 +28,10 @@ updates:
     labels:
       - "go dependencies" # Apply a label to dependency update PRs for Go modules.
     open-pull-requests-limit: 1 # Limit the number of open PRs to 1 at a time.
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*" # Group all Go dependency updates into a single PR.
+        update-types:
+          - minor # Allow minor updates in grouped PR.
+          - patch # Allow patch updates in grouped PR.

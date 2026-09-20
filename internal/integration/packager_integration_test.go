@@ -1,75 +1,86 @@
 package integration
 
 import (
-	"context"
-	"net"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/oshokin/alarm-button/internal/config"
 	"github.com/oshokin/alarm-button/internal/service/packager"
-	upd "github.com/oshokin/alarm-button/internal/service/updater"
+	"github.com/oshokin/alarm-button/internal/service/updater"
 )
 
-// TestPackager_WritesManifest generates a minimal manifest with placeholder files and verifies it exists.
-func TestPackager_WritesManifest(t *testing.T) {
-	// Setup test directory and change working directory.
+// TestPackager_WritesSignedManifest verifies integration path for manifest and signature emission.
+func TestPackager_WritesSignedManifest(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
-	prev, _ := os.Getwd() //nolint:errcheck // Test code needs simple os.Getwd for directory change.
+	inputDir := filepath.Join(dir, "input")
+	outputDir := filepath.Join(dir, "output")
 
-	t.Chdir(dir)
+	require.NoError(t, os.MkdirAll(inputDir, 0o755))
 
-	t.Cleanup(func() {
-		t.Chdir(prev)
+	specs := updater.RoleSpecsForPlatform(runtime.GOOS)
+	unique := map[string]struct{}{}
+
+	for _, spec := range specs {
+		for _, name := range spec.Files {
+			unique[name] = struct{}{}
+		}
+	}
+
+	for name := range unique {
+		require.NoError(t, os.WriteFile(filepath.Join(inputDir, name), []byte(name), 0o755))
+	}
+
+	clientCfg := filepath.Join(dir, "client.yaml")
+	serverCfg := filepath.Join(dir, "server.yaml")
+
+	require.NoError(t, os.WriteFile(clientCfg, []byte(`
+server_addr: 127.0.0.1:50051
+listen_addr: 127.0.0.1:50051
+update_folder: https://updates.example.com/client
+timeout: 5s
+`), 0o600))
+
+	require.NoError(t, os.WriteFile(serverCfg, []byte(`
+server_addr: 127.0.0.1:50051
+listen_addr: 127.0.0.1:50051
+update_folder: https://updates.example.com/server
+timeout: 5s
+`), 0o600))
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	keyPath := filepath.Join(dir, "signing-key.pem")
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}), 0o600))
+
+	err = packager.Run(&packager.Options{
+		InputDir:             inputDir,
+		OutputDir:            outputDir,
+		Version:              "1.8.0",
+		SigningKey:           keyPath,
+		GOOS:                 runtime.GOOS,
+		GOARCH:               runtime.GOARCH,
+		ClientConfig:         clientCfg,
+		ClientConfigRevision: 31,
+		ServerConfig:         serverCfg,
+		ServerConfigRevision: 19,
+		KeyID:                "test-key",
 	})
-
-	// Start a real gRPC server so reachability check passes.
-	addr := reservePort(t)
-	statePath := filepath.Join(dir, "state.json")
-
-	stop := startGRPC(t, addr, statePath)
-	defer stop()
-
-	// Create placeholder files expected by packager.
-	for _, name := range upd.FilesWithChecksum() {
-		f, err := os.Create(name)
-		require.NoError(t, err)
-
-		_ = f.Close()
-	}
-
-	// Run packager with timeout context.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	options := &packager.Options{
-		// Ensure the settings file is one of checksummed files.
-		ConfigPath:    config.DefaultConfigFilename,
-		UpdateFolder:  "http://localhost/updates",
-		ServerAddress: addr,
-	}
-
-	err := packager.Run(ctx, options)
 	require.NoError(t, err)
 
-	// Verify version manifest file was created.
-	_, err = os.Stat(upd.VersionFilename)
+	_, err = os.Stat(filepath.Join(outputDir, updater.VersionFilename))
 	require.NoError(t, err)
-}
-
-// ReservePort returns address on a free TCP port and closes it.
-func reservePort(t *testing.T) string {
-	t.Helper()
-
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	_, err = os.Stat(filepath.Join(outputDir, updater.SignatureFilename))
 	require.NoError(t, err)
-
-	addr := l.Addr().String()
-	_ = l.Close()
-
-	return addr
 }

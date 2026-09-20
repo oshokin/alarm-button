@@ -13,6 +13,7 @@ import (
 	"github.com/oshokin/alarm-button/internal/version"
 )
 
+// CLI globals hold flags and root command wiring.
 var (
 	// cfgPath stores the configuration file path.
 	cfgPath string

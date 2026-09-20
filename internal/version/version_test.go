@@ -6,79 +6,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestVersionStrings ensures Short and Full return non-empty consistent information.
+// TestVersionStrings verifies combined short and full version rendering.
 func TestVersionStrings(t *testing.T) {
-	t.Parallel()
-
-	require.NotEmpty(t, Short())
-	require.Contains(t, Full(), Short())
+	setBuildInfoForTest(t, "1.2.3", "abc123")
+	require.Equal(t, "1.2.3", Short())
+	require.Equal(t, "version: 1.2.3, commit: abc123", Full())
 }
 
-// TestShort verifies that the Short function returns
-// the correct version string for different version values.
+// TestShort verifies short version output.
 func TestShort(t *testing.T) {
-	tests := []struct {
-		name     string
-		version  string
-		expected string
-	}{
-		{
-			name:     "default version",
-			version:  "1.0.0",
-			expected: "1.0.0",
-		},
-		{
-			name:     "custom version",
-			version:  "2.1.3",
-			expected: "2.1.3",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			Version = tt.version
-			if got := Short(); got != tt.expected {
-				t.Errorf("Short() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
+	setBuildInfoForTest(t, "2.1.3", "none")
+	require.Equal(t, "2.1.3", Short())
 }
 
-// TestFull verifies that the Full function returns the correct formatted string
-// with version, commit hash, and build timestamp information.
+// TestFull verifies full version output with commit metadata.
 func TestFull(t *testing.T) {
-	tests := []struct {
-		name      string
-		version   string
-		commit    string
-		buildTime string
-		expected  string
-	}{
-		{
-			name:      "default values",
-			version:   "1.0.0",
-			commit:    "none",
-			buildTime: "unknown",
-			expected:  "version: 1.0.0, commit: none, built at: unknown",
-		},
-		{
-			name:      "custom values",
-			version:   "2.1.3",
-			commit:    "abc123",
-			buildTime: "2024-01-15T10:30:00Z",
-			expected:  "version: 2.1.3, commit: abc123, built at: 2024-01-15T10:30:00Z",
-		},
-	}
+	setBuildInfoForTest(t, "2.1.3", "abc123")
+	require.Equal(t, "version: 2.1.3, commit: abc123", Full())
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			Version = tt.version
-			Commit = tt.commit
-			BuildTime = tt.buildTime
+// setBuildInfoForTest temporarily overrides build metadata for test assertions.
+func setBuildInfoForTest(t *testing.T, version string, commit string) {
+	t.Helper()
 
-			if got := Full(); got != tt.expected {
-				t.Errorf("Full() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
+	oldVersion := Version
+	oldCommit := Commit
+
+	Version = version
+	Commit = commit
+
+	t.Cleanup(func() {
+		Version = oldVersion
+		Commit = oldCommit
+	})
 }

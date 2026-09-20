@@ -7,55 +7,27 @@ A distributed emergency shutdown system designed to quickly and safely power dow
 
 ## 🐅 Emergency Scenarios
 
-### **Primary Threat: Elevator Tiger Incident**
+### Primary Threat: Elevator Tiger Incident
 
 When wildlife experts detect a hungry tiger has entered the building elevator, office safety protocols require immediate evacuation. This system ensures all computers are safely powered down to prevent data loss and equipment damage during the emergency evacuation.
 
-### **Additional Tiger Threat Scenarios**
+### Additional Tiger Threat Scenarios
 
-**🚪 Tiger Stuck in Revolving Door**
+#### 🚪 Tiger Stuck in Revolving Door
 
 - Tiger enters revolving door but gets confused by the rotation mechanism
 - Keeps going in circles for 10 minutes while growing increasingly frustrated
 - Security realizes the situation when they hear rhythmic growling every 30 seconds
 - Emergency shutdown prevents tiger from learning how doors work
 
-**☕ Tiger in Office Kitchen**  
+#### ☕ Tiger in Office Kitchen
 
 - Tiger discovers the coffee machine and becomes highly caffeinated
 - Starts frantically pressing alarm buttons while jittery from espresso
 - Attempts to use microwave but can't figure out the timer
 - System activates when tiger accidentally triggers motion sensors while doing coffee-induced zoomies
 
-**🖨️ Tiger vs. Printer Jam**
-
-- Tiger somehow gets into the office and immediately encounters paper jam
-- Becomes enraged at paper feeding mechanism (relatable)
-- Starts shredding printer manual with claws while printer keeps beeping
-- System detects unusual paper shredding patterns and activates emergency protocols
-
-**🗂️ Tiger Filing Tax Documents**
-
-- Tiger breaks into accounting department during tax season
-- Attempts to organize receipts but lacks opposable thumbs
-- Gets increasingly frustrated with Excel spreadsheets
-- Emergency shutdown prevents tiger from discovering the horrors of corporate bureaucracy
-
-**🎵 Tiger Karaoke Emergency**
-
-- Tiger discovers office karaoke machine left over from Christmas party
-- Starts howling along to "My Way" by Frank Sinatra at 3 AM
-- Security cameras detect large feline attempting to hold microphone
-- System activates to spare everyone from tiger's terrible singing
-
-**🍕 Tiger Food Delivery Confusion**
-
-- Hungry tiger follows pizza delivery person into building
-- Gets confused when pizza doesn't contain actual wildlife
-- Starts investigating vending machines for more substantial prey
-- Emergency protocols engage when tiger realizes office snacks are mostly carbs
-
-**📱 Tiger Zoom Meeting Incident**
+#### 📱 Tiger Zoom Meeting Incident
 
 - Tiger accidentally joins all-hands meeting through open laptop
 - Entire company sees large cat staring directly into webcam
@@ -83,7 +55,7 @@ The system follows a client-server architecture with role-based executable distr
 
 ### Prerequisites
 
-- Go 1.25 or later
+- Go 1.27.1 or later
 - [Task](https://taskfile.dev/) build tool
 - Network connectivity between server and all client machines
 
@@ -106,7 +78,7 @@ This system supports the following platforms:
 2. **Download the appropriate archive for your system:**
 
    | Platform | Architecture | Download Format | Example Filename |
-   |----------|-------------|-----------------|------------------|
+   | ---------- | ------------- | ----------------- | ------------------ |
    | **Windows x64** | amd64 | ZIP | `alarm-button_v1.0.0_windows_amd64.zip` |
    | **Windows ARM64** | arm64 | ZIP | `alarm-button_v1.0.0_windows_arm64.zip` |
    | **Linux x64** | amd64 | tar.gz | `alarm-button_v1.0.0_linux_amd64.tar.gz` |
@@ -147,11 +119,6 @@ This system supports the following platforms:
 
 #### Option 2: Build From Source (For Developers)
 
-**Prerequisites:**
-
-- Go 1.25 or later
-- [Task](https://taskfile.dev/) build tool
-
 **Installation:**
 
 ```bash
@@ -160,7 +127,7 @@ git clone https://github.com/oshokin/alarm-button.git
 cd alarm-button
 
 # Install development tools
-task install:all
+task install-tools
 
 # Build all executables for your platform
 task build
@@ -200,10 +167,28 @@ timeout: "30s"
 
    ```bash
    # Linux/macOS
-   ./alarm-packager control-room-server:8080 /path/to/update/folder
+   ./alarm-packager \
+     --input-dir ./dist/linux_amd64 \
+     --output-dir /path/to/update/folder \
+     --version 1.5.7 \
+     --key-id 2026-03 \
+     --private-key /secure/update-signing-key.pem \
+     --client-config ./deployment/client/alarm-button-settings.yaml \
+     --client-config-revision 42 \
+     --server-config ./deployment/server/alarm-button-settings.yaml \
+     --server-config-revision 17
    
-   # Windows
-   .\alarm-packager.exe control-room-server:8080 C:\path\to\update\folder
+   # Windows (PowerShell)
+   .\alarm-packager.exe `
+     --input-dir .\dist\windows_amd64 `
+     --output-dir C:\path\to\update\folder `
+     --version 1.5.7 `
+     --key-id 2026-03 `
+     --private-key C:\secure\update-signing-key.pem `
+     --client-config .\deployment\client\alarm-button-settings.yaml `
+     --client-config-revision 42 `
+     --server-config .\deployment\server\alarm-button-settings.yaml `
+     --server-config-revision 17
    ```
 
 ### Client Setup (Office Workstations)
@@ -245,6 +230,30 @@ timeout: "30s"
 
 ## 🎯 Usage
 
+### Real-World Meaning of "Tiger"
+
+"Tiger" is a friendly codename for "something bad just happened, shut things down and leave calmly."
+The practical plan behind the joke is simple:
+
+- one brave human (often from accounting) presses `alarm-button-on` immediately;
+- `alarm-checker` on workstations starts controlled shutdown while people evacuate;
+- this still works without internet, as long as clients can reach `alarm-server` over LAN.
+
+If unexpected guests decide network and electricity should end early, this gives staff a short but useful reaction window.
+
+### 30-Second Runbook (Before The Tiger Learns Wi-Fi)
+
+1. **Trigger:** nearest operator hits `alarm-button-on` (or desktop shortcut).
+2. **Verify:** duty engineer confirms alarm propagation via `alarm-server` logs/health.
+3. **Evacuate:** humans leave; machines keep shutting down automatically.
+4. **Recover:** after all-clear, authorized staff presses `alarm-button-off`.
+
+### Operational Constraints (Even Tigers Have Physics)
+
+- If power disappears instantly, graceful shutdown has the same chance as explaining Excel macros to a tiger.
+- UPS is strongly recommended for `alarm-server`, network gear, and critical workstations.
+- Internet is optional; LAN connectivity to `alarm-server` is required.
+
 ### Emergency Activation
 
 When any tiger scenario is detected in the building:
@@ -262,16 +271,6 @@ When any tiger scenario is detected in the building:
    **OR just double-click the desktop shortcut!**
 
 2. **All office computers will automatically shutdown** within seconds as `alarm-checker` services detect the alarm state.
-
-### **Scenario-Specific Activation Guidelines**
-
-- **🚪 Revolving Door Tiger**: Activate while tiger is still spinning (gives you 10 minutes)
-- **☕ Caffeinated Tiger**: Activate immediately - coffee makes tigers unpredictable  
-- **🖨️ Printer Jam Tiger**: Wait until tiger finishes destroying printer (it's therapeutic for everyone)
-- **🗂️ Tax Document Tiger**: Activate before tiger discovers depreciation schedules
-- **🎵 Karaoke Tiger**: Activate only if tiger attempts songs from musicals
-- **🍕 Pizza Tiger**: Activate after tiger realizes there's no meat on veggie supreme
-- **📱 Zoom Tiger**: Activate when tiger tries to unmute itself
 
 ### Reset After Emergency
 
@@ -335,7 +334,7 @@ Once the tiger has been safely captured:
 start .\alarm-server.exe :9999
 
 # Run integration tests (requires building from source)
-task test -- ./internal/integration/...
+go test -count=1 ./internal/integration/...
 ```
 
 ### Simulate Emergency (Debug Mode)
@@ -378,10 +377,10 @@ git commit -m "major: redesign API with breaking changes"
 
 ```bash
 # Enable commit message validation (recommended)
-task install:githooks
+task install-githooks
 
 # Disable if needed
-task remove:githooks
+task remove-githooks
 ```
 
 Once hooks are enabled, invalid commit messages will be rejected locally.
@@ -412,55 +411,54 @@ This project uses [Task](https://taskfile.dev/) as a build tool. Below are all a
 task build                    # Build all project binaries
 task clean                    # Remove all built binaries
 task test                     # Run all tests with verbose output
-task test:race                # Run tests with race detector enabled
-task format                   # Format Go code using goimports
-task generate                 # Generate protobuf code and format
+task test-race                # Run tests with race detector enabled
+task generate-protobuf        # Generate protobuf code and format
+task version-check            # Check next semantic version from commit history
 ```
 
 ### Linting Tasks
 
 ```bash
-task lint                     # Run standard golangci-lint checks on changed files
-task lint:fix                 # Run standard golangci-lint checks on changed files and auto-fix
-task lint:full                # Run standard golangci-lint checks on all files
-task lint:full:fix            # Run standard golangci-lint checks on all files and auto-fix
+task lint                     # Run golangci-lint
+task lint-fix                 # Run golangci-lint with auto-fix
+task security                 # Run govulncheck scan
 ```
 
 ### Installation Tasks
 
 ```bash
-task install:all              # Bootstrap development environment (installs all tools)
-task install:goimports        # Install goimports tool
-task install:lint             # Install golangci-lint
-task install:protoc           # Install protoc compiler
-task install:protoc-gen-go    # Install protoc-gen-go plugin
-task install:protoc-gen-go-grpc # Install protoc-gen-go-grpc plugin
-task install:githooks         # Configure Git hooks for semantic commit enforcement
-task remove:githooks          # Disable Git hooks for this repository
+task install-tools            # Install all development tools
+task install-lint             # Install golangci-lint
+task install-protoc           # Install protoc compiler
+task install-protoc-gen-go    # Install protoc-gen-go plugin
+task install-protoc-gen-go-grpc # Install protoc-gen-go-grpc plugin
+task install-githooks         # Configure Git hooks for semantic commit enforcement
+task remove-githooks          # Disable Git hooks for this repository
 ```
 
 ### Version Management Tasks
 
 ```bash
-task version:pull-tags         # Fetch latest tags from remote (useful for version detection)
+task fetch-tags               # Fetch latest tags from remote
+task version-check            # Check next semantic version from commit history
 ```
 
-### Examples
+### Task Usage Examples
 
 ```bash
 # First-time setup
-task install:all
+task install-tools
 
 # Development workflow
-task generate        # Generate protobuf if API changed
-task format          # Format code
-task lint:fix        # Fix linting issues
+task generate-protobuf # Generate protobuf if API changed
+task lint-fix        # Fix linting issues
 task test            # Run tests
 task build           # Build binaries
 
 # Quality checks
-task lint:full       # Check entire codebase
-task test:race       # Run with race detection
+task lint            # Check lint rules
+task test-race       # Run with race detection
+task security        # Run vulnerability checks
 ```
 
 ## 📁 Project Structure
@@ -518,13 +516,38 @@ alarm-button/
 - **Update Security**: Verify checksums for all distributed updates
 - **Cross-Platform**: Same security model applies to all supported platforms
 
+### Update Signing Key Ceremony
+
+Treat signing keys like tiger fangs: shiny in public, dangerous in private.
+
+1. Generate a new signing key offline (`keygen` creates the Ed25519 pair itself and prints trusted public key + recommended key ID):
+
+   Linux/macOS:
+
+   ```bash
+   go run ./cmd/alarm-packager keygen --private-key /secure/update-signing-key.pem --key-id 2026-03
+   ```
+
+   Windows (PowerShell):
+
+   ```powershell
+   go run .\cmd\alarm-packager keygen --private-key C:\secure\update-signing-key.pem --key-id 2026-03
+   ```
+
+   If you omit `--key-id`, `keygen` auto-suggests `YYYY-MM` in UTC.
+
+2. Keep the private key out of git forever (vault/HSM/CI secret store only).
+3. Publish only the public key in `internal/service/updater/signature.go`.
+4. Sign release artifacts with `alarm-packager` using that private key.
+5. Run a smoke test: `alarm-updater` must accept the signature and apply update from HTTP repository.
+
 ## 🚀 Automated Releases
 
 This project uses automated semantic versioning and releases:
 
 ### How It Works
 
-1. **Commit with semantic prefix**: `fix:`, `feat:`, or `major:`
+1. **Commit with semantic prefix** (see [Semantic Versioning and Commit Messages](#semantic-versioning-and-commit-messages))
 2. **Push to master**: GitHub Actions analyzes commits since last release
 3. **Automatic version bump**: Script determines version increment
 4. **Tag creation**: New semantic version tag is created (e.g., `v1.4.8`)
@@ -533,9 +556,7 @@ This project uses automated semantic versioning and releases:
 
 ### Release Types
 
-- **Patch Release** (`fix:`): `v1.0.0` → `v1.0.1` (bug fixes)
-- **Minor Release** (`feat:`): `v1.0.0` → `v1.1.0` (new features)
-- **Major Release** (`major:`): `v1.0.0` → `v2.0.0` (breaking changes)
+Release type mapping is defined once in the Development section (`fix:` / `feat:` / `major:`).
 
 ### Manual Release (if needed)
 
@@ -579,29 +600,11 @@ To use: Open VSCode, go to Run & Debug (Ctrl+Shift+D), and select any configurat
 
 ### Development Workflow
 
-```bash
-# Initial setup
-git clone https://github.com/oshokin/alarm-button.git
-cd alarm-button
-task install:all          # Install all development tools
-task install:githooks     # Enable commit message validation
+Use the canonical command sets from these sections in this README:
 
-# Development cycle
-task format               # Format code
-task generate            # Generate protobuf files (if needed)
-task lint:fix            # Fix auto-fixable linting issues
-task test                # Run tests
-task build               # Build all binaries
-
-# Before committing
-task lint:full           # Full codebase lint check
-task test:race          # Race condition testing
-
-# Commit with semantic message
-git add .
-git commit -m "feat: add new emergency notification system"
-git push origin feature-branch
-```
+- `Build Tasks`
+- `Examples`
+- `Semantic Versioning and Commit Messages`
 
 ## 📋 License
 
@@ -611,42 +614,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 This software is designed for emergency situations involving hungry tigers entering office buildings via elevators and related feline workplace incidents.
 
-### **Testing Methodology**
+### Practical Limits and Scope
 
-While we've tested extensively with simulated tiger scenarios using:
-
-- Cardboard tiger cutouts (surprisingly effective)
-- Employees wearing tiger costumes (less effective, caused different type of panic)
-- Actual zoo tigers (discontinued after legal complications)
-- CGI tigers (tigers were unimpressed by special effects)
-
-**Actual tiger encounters may vary significantly.**
-
-### **Known Limitations**
-
-- System may not detect tigers wearing business casual attire
-- False positives possible with very large orange cats
-- Effectiveness reduced if tiger has completed IT training
-- Does not account for tigers who have learned to use keycards
-- Vegetarian tigers may not trigger hunger-based detection algorithms
-
-### **Support Policy**
-
-- **Tiger-related incidents**: Covered under standard warranty
-- **Lion, leopard, or other big cats**: Please file bug report with species specification
-- **Domestic cats acting like tigers**: Not covered (this is normal cat behavior)
-- **Tigers successfully using office equipment**: Please contact our research department immediately
-
-### **Emergency Protocols**
-
-For non-tiger emergencies, consult your local emergency services.
-For tiger emergencies involving:
-
-- **Accounting software**: Contact your tax attorney
-- **HR violations**: Tigers are not subject to corporate policy
-- **Coffee machine malfunctions**: Priority Level 1 incident regardless of tiger presence
-
-Please ensure your building has proper wildlife control measures in addition to this software solution.
+- This software orchestrates technical shutdown; it does not replace physical safety procedures.
+- For non-tiger emergencies (fire, medical, security), follow official emergency response first.
+- "Tiger" includes any urgent on-site incident where fast workstation shutdown reduces risk.
+- If the tiger (or any equivalent chaos source) outruns your power backup plan, people still come first, laptops second.
 
 ---
 

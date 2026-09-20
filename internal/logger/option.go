@@ -7,6 +7,7 @@ import (
 
 // coreWithLevel wraps a zapcore.Core with a specific log level.
 type coreWithLevel struct {
+	// Core is wrapped zap core used for logging output and entry checks.
 	zapcore.Core
 
 	// level is the minimum log level for this core to process messages.
@@ -23,7 +24,7 @@ func (c *coreWithLevel) Enabled(l zapcore.Level) bool {
 // It returns the checked entry with the added core or the original checked entry
 // if the level is disabled.
 //
-//nolint:gocritic // AddCore requires ent to be passed by value.
+//nolint:gocritic // zapcore.Core.Check signature requires zapcore.Entry by value.
 func (c *coreWithLevel) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
 	if c.Enabled(ent.Level) {
 		return ce.AddCore(ent, c)
