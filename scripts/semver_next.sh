@@ -65,21 +65,26 @@ fi
 shopt -s nocasematch
 
 # Check for version bump type with precedence: major > feat > fix.
-# Default to patch for any commits (even non-semantic ones).
-bump="patch"
+# Default to no bump when there are no commits in the analyzed range.
+bump="none"
+if (( ${#subjects[@]} > 0 )); then
+  bump="patch"
+fi
 
 # First pass: check for major version bump (breaking changes).
-for s in "${subjects[@]}"; do
-  if [[ $s =~ ^major: ]]; then 
-    bump="major"
-    break  # Major takes highest precedence, stop searching.
-  fi
-done
+if [[ "$bump" != "none" ]]; then
+  for s in "${subjects[@]}"; do
+    if [[ $s =~ ^major(\([^)]+\))?: ]]; then
+      bump="major"
+      break  # Major takes highest precedence, stop searching.
+    fi
+  done
+fi
 
 # Second pass: check for minor version bump (new features) if no major found.
 if [[ $bump == "patch" ]]; then
   for s in "${subjects[@]}"; do
-    if [[ $s =~ ^feat: ]]; then 
+    if [[ $s =~ ^feat(\([^)]+\))?: ]]; then
       bump="minor"
       break  # Minor found, stop searching.
     fi
@@ -90,7 +95,7 @@ fi
 # Note: We already default to patch, so this preserves explicit fix: commits.
 if [[ $bump == "patch" ]]; then
   for s in "${subjects[@]}"; do
-    if [[ $s =~ ^fix: ]]; then 
+    if [[ $s =~ ^fix(\([^)]+\))?: ]]; then
       bump="patch"
       break  # Explicit patch found, maintain patch.
     fi

@@ -5,12 +5,6 @@ version: 2
 # Name of the project used in release artifacts and archives.
 project_name: alarm-button
 
-# Pre-build hooks to ensure clean dependencies before building.
-before:
-  hooks:
-    # Clean up and download missing Go module dependencies.
-    - go mod tidy
-
 # Build configuration for all project executables.
 # Each binary is built for multiple platforms (Windows, Linux, macOS) and architectures.
 builds:
@@ -21,9 +15,10 @@ builds:
     goos: [linux, darwin, windows] # Target operating systems.
     goarch: [amd64, arm64] # Target architectures.
     env: [CGO_ENABLED=0] # Disable CGO for static binaries.
+    flags: [-trimpath] # Improve reproducibility by stripping local paths.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
-      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }}
   # Client executable to trigger emergency alarm (tiger detected!).
   - id: alarm-button-on
     main: ./cmd/alarm-button-on
@@ -31,9 +26,10 @@ builds:
     goos: [linux, darwin, windows] # Target operating systems.
     goarch: [amd64, arm64] # Target architectures.
     env: [CGO_ENABLED=0] # Disable CGO for static binaries.
+    flags: [-trimpath] # Improve reproducibility by stripping local paths.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
-      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }}
 
   # Client daemon that monitors alarm state and initiates shutdown when activated.
   - id: alarm-checker
@@ -42,9 +38,10 @@ builds:
     goos: [linux, darwin, windows] # Target operating systems.
     goarch: [amd64, arm64] # Target architectures.
     env: [CGO_ENABLED=0] # Disable CGO for static binaries.
+    flags: [-trimpath] # Improve reproducibility by stripping local paths.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
-      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }}
 
   # Server utility to prepare and distribute software updates.
   - id: alarm-packager
@@ -53,9 +50,10 @@ builds:
     goos: [linux, darwin, windows] # Target operating systems.
     goarch: [amd64, arm64] # Target architectures.
     env: [CGO_ENABLED=0] # Disable CGO for static binaries.
+    flags: [-trimpath] # Improve reproducibility by stripping local paths.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
-      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }}
 
   # Central gRPC server that manages the distributed alarm state.
   - id: alarm-server
@@ -64,9 +62,10 @@ builds:
     goos: [linux, darwin, windows] # Target operating systems.
     goarch: [amd64, arm64] # Target architectures.
     env: [CGO_ENABLED=0] # Disable CGO for static binaries.
+    flags: [-trimpath] # Improve reproducibility by stripping local paths.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
-      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }}
 
   # Client utility to download and apply software updates automatically.
   - id: alarm-updater
@@ -75,9 +74,10 @@ builds:
     goos: [linux, darwin, windows] # Target operating systems.
     goarch: [amd64, arm64] # Target architectures.
     env: [CGO_ENABLED=0] # Disable CGO for static binaries.
+    flags: [-trimpath] # Improve reproducibility by stripping local paths.
     ldflags:
       # Strip debug info (-s -w) and inject version metadata at build time.
-      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }} -X github.com/oshokin/alarm-button/internal/version.BuildTime={{ .Date }}
+      - -s -w -X github.com/oshokin/alarm-button/internal/version.Version={{ .Version }} -X github.com/oshokin/alarm-button/internal/version.Commit={{ .ShortCommit }}
 
 # Archive configuration for distributing the built binaries.
 archives:
@@ -89,6 +89,12 @@ archives:
     wrap_in_directory: false # Place files directly in archive root.
     files:
       - README.md # Include documentation in releases.
+      - LICENSE # Include license in releases.
+
+# Checksum configuration for released artifacts.
+checksum:
+  name_template: checksums.txt # Publish all artifact checksums into a single file.
+  algorithm: sha256 # Use SHA-256 for deterministic integrity verification.
 
 # Changelog generation settings for release notes.
 changelog:
@@ -101,6 +107,8 @@ changelog:
 
 # GitHub release configuration for publishing artifacts.
 release:
+  preflight: # Run built-in release validation checks before publish.
+    fail_on_error: true # Stop the release if any preflight check fails.
   github:
     owner: oshokin # GitHub repository owner.
     name: alarm-button # GitHub repository name.

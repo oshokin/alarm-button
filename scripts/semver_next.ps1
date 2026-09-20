@@ -77,21 +77,23 @@ if ($subjects -is [string]) {
 
 # Determine the appropriate version bump based on commit message patterns.
 # Check for version bump type with precedence: major > feat > fix.
-# Default to patch for any commits (even non-semantic ones).
-$bump = "patch"
+# Default to no bump when there are no commits in the analyzed range.
+$bump = if ($subjects.Count -gt 0) { "patch" } else { "none" }
 
 # First pass: check for major version bump (breaking changes).
-foreach ($subject in $subjects) {
-    if ($subject -match '^major:') {
-        $bump = "major"
-        break  # Major takes highest precedence, stop searching.
+if ($bump -ne "none") {
+    foreach ($subject in $subjects) {
+        if ($subject -match '^major(\([^)]+\))?:') {
+            $bump = "major"
+            break  # Major takes highest precedence, stop searching.
+        }
     }
 }
 
 # Second pass: check for minor version bump (new features) if no major found.
 if ($bump -eq "patch") {
     foreach ($subject in $subjects) {
-        if ($subject -match '^feat:') {
+        if ($subject -match '^feat(\([^)]+\))?:') {
             $bump = "minor"
             break  # Minor found, stop searching.
         }
@@ -102,7 +104,7 @@ if ($bump -eq "patch") {
 # Note: We already default to patch, so this preserves explicit fix: commits.
 if ($bump -eq "patch") {
     foreach ($subject in $subjects) {
-        if ($subject -match '^fix:') {
+        if ($subject -match '^fix(\([^)]+\))?:') {
             $bump = "patch"
             break  # Explicit patch found, maintain patch.
         }

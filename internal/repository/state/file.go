@@ -14,6 +14,7 @@ import (
 
 	"github.com/oshokin/alarm-button/internal/config"
 	domain "github.com/oshokin/alarm-button/internal/domain/alarm"
+	"github.com/oshokin/alarm-button/internal/fsutil"
 	pb "github.com/oshokin/alarm-button/internal/pb/v1"
 )
 
@@ -44,9 +45,17 @@ func NewFileRepository(path string) *FileRepository {
 }
 
 // Load reads the state from disk.
-func (r *FileRepository) Load(_ context.Context) (*domain.State, error) {
+func (r *FileRepository) Load(ctx context.Context) (*domain.State, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	contents, err := os.ReadFile(r.path)
 	if err != nil {
@@ -62,16 +71,26 @@ func (r *FileRepository) Load(_ context.Context) (*domain.State, error) {
 		return nil, fmt.Errorf("decode state file: %w", err)
 	}
 
-	return fromProto(&protoState), nil
+	return r.fromProto(&protoState), nil
 }
 
 // Save writes the state to disk using JSON representation.
-func (r *FileRepository) Save(_ context.Context, state *domain.State) error {
+func (r *FileRepository) Save(ctx context.Context, state *domain.State) error {
+	ctxErr := ctx.Err()
+	if ctxErr != nil {
+		return ctxErr
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	ctxErr = ctx.Err()
+	if ctxErr != nil {
+		return ctxErr
+	}
+
 	var (
-		protoState     = toProto(state)
+		protoState     = r.toProto(state)
 		marshalOptions = protojson.MarshalOptions{
 			EmitUnpopulated: true,
 		}
@@ -82,7 +101,12 @@ func (r *FileRepository) Save(_ context.Context, state *domain.State) error {
 		return fmt.Errorf("encode state: %w", err)
 	}
 
-	if err = os.WriteFile(r.path, data, config.DefaultFilePermissions); err != nil {
+	ctxErr = ctx.Err()
+	if ctxErr != nil {
+		return ctxErr
+	}
+
+	if err = fsutil.WriteFileAtomic(r.path, data, config.DefaultFilePermissions); err != nil {
 		return fmt.Errorf("write state file: %w", err)
 	}
 
@@ -90,7 +114,7 @@ func (r *FileRepository) Save(_ context.Context, state *domain.State) error {
 }
 
 // fromProto converts protobuf AlarmStateResponse into the domain State model.
-func fromProto(protoState *pb.AlarmStateResponse) *domain.State {
+func (r *FileRepository) fromProto(protoState *pb.AlarmStateResponse) *domain.State {
 	var (
 		timestamp time.Time
 		actor     *domain.Actor
@@ -115,7 +139,7 @@ func fromProto(protoState *pb.AlarmStateResponse) *domain.State {
 }
 
 // toProto converts the domain State model into protobuf AlarmStateResponse.
-func toProto(state *domain.State) *pb.AlarmStateResponse {
+func (r *FileRepository) toProto(state *domain.State) *pb.AlarmStateResponse {
 	var timestamp *timestamppb.Timestamp
 	if !state.Timestamp.IsZero() {
 		timestamp = timestamppb.New(state.Timestamp)

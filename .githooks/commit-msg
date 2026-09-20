@@ -13,8 +13,14 @@ msg_file="$1"
 subject=$(sed -n '1p' "$msg_file" | tr -d '\r')
 
 # Define the required commit message pattern using extended regex.
-# Messages must start with one of: fix:, feat:, or major: followed by a space.
-pattern='^(fix|feat|major): '
+# Supported forms:
+#   fix: message
+#   fix(scope): message
+#   feat: message
+#   feat(scope): message
+#   major: message
+#   major(scope): message
+pattern='^(fix|feat|major)(\([^)]+\))?: .+'
 
 # Check if the commit message subject matches the required pattern.
 # If it matches, exit successfully (allow the commit to proceed).

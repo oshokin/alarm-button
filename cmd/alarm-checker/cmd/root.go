@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -13,11 +14,16 @@ import (
 	"github.com/oshokin/alarm-button/internal/version"
 )
 
+// CLI globals hold flags and root command wiring.
 var (
 	// configPath stores the path to the configuration YAML file.
 	configPath string
 	// debug controls whether to skip shutdown when alarm is enabled.
 	debug bool
+	// timeout overrides per-RPC timeout from configuration when set.
+	timeout time.Duration
+	// pidFile path where checker writes own process identifier.
+	pidFile string
 
 	// rootCmd represents the base command for polling alarm state.
 	rootCmd = &cobra.Command{
@@ -47,7 +53,9 @@ This runs as a background service to automatically shutdown when security is act
 			checkerOptions := &checker.Options{
 				ConfigPath:    configPath,
 				ServerAddress: serverAddress,
+				Timeout:       timeout,
 				Debug:         debug,
+				PIDFile:       pidFile,
 			}
 
 			return checker.Run(ctx, checkerOptions)
@@ -71,6 +79,8 @@ func init() {
 
 	// Hidden debug flag to skip shutdown for debugging.
 	rootCmd.Flags().BoolVarP(&debug, "debug", "d", false, "skip shutdown for debugging")
+	rootCmd.Flags().DurationVar(&timeout, "timeout", 0, "override RPC timeout (e.g. 5s)")
+	rootCmd.Flags().StringVar(&pidFile, "pid-file", "", "path to checker pid file; empty uses executable directory")
 
 	err := rootCmd.Flags().MarkHidden("debug")
 	if err != nil {

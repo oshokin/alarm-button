@@ -3,645 +3,1235 @@ package updater
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ed25519"
+	"crypto/sha512"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
-	"strings"
+	"slices"
+	"time"
 
 	goupdate "github.com/doitdistributed/go-update"
-	"github.com/mitchellh/go-ps"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/oshokin/alarm-button/internal/config"
+	"github.com/oshokin/alarm-button/internal/fsutil"
 	"github.com/oshokin/alarm-button/internal/logger"
+	pb "github.com/oshokin/alarm-button/internal/pb/v1"
+	"github.com/oshokin/alarm-button/internal/proc"
 	"github.com/oshokin/alarm-button/internal/service/common"
 )
 
-var (
-	errUpdaterAlreadyRunning  = errors.New("the updater is already running")
-	errSettingsNotInitialised = errors.New("settings are not initialized")
-	errEmptyDescription       = errors.New("update description is empty")
-	errNoRoleFiles            = errors.New("unable to find files for role")
-	errNoChecksum             = errors.New("checksum missing for file")
-	errBadHTTPStatus          = errors.New("unexpected http status")
-	errNoRoleExecutable       = errors.New("unable to find executable for role")
-	errUnsupportedOS          = errors.New("os not supported")
-	errInvalidVersionOutput   = errors.New("invalid version output format")
-	errUnknownUpdateType      = errors.New("unknown update type")
+// Updater runtime constants for artifact application and checker readiness windows.
+const (
+	defaultExecutablePerm = fs.FileMode(0o755)
+	checkerReadinessDelay = 100 * time.Millisecond
+	checkerReadinessMax   = 5 * time.Second
 )
 
-// Options are inputs accepted by the updater entry point.
-type Options struct {
-	// ConfigPath is the optional path to settings YAML file.
-	ConfigPath string
-	// UpdateType is the role to update for (client or server).
-	UpdateType string
+// Updater execution and artifact integrity errors.
+var (
+	errUpdaterOptionsRequired      = errors.New("updater options are required")
+	errInstallRootIsRequired       = errors.New("install root is required")
+	errInsecureUpdateURLNotAllowed = errors.New(
+		"insecure update URL requires localhost host or allow_insecure_update_url=true",
+	)
+	errBadDownloadStatus        = errors.New("bad download status")
+	errArtifactSizeMismatch     = errors.New("artifact size mismatch")
+	errArtifactChecksumMismatch = errors.New("artifact checksum mismatch")
+	errUnexpectedProbeStatus    = errors.New("unexpected update source status")
+	errUnsupportedApplyKind     = errors.New("unsupported artifact kind")
+	errUnsupportedRollbackKind  = errors.New("unsupported backup kind")
+	errCheckerExitedEarly       = errors.New("checker process exited before readiness")
+	errCheckerPIDMismatch       = errors.New("checker pid does not match started process")
+	errCheckerReadinessTimeout  = errors.New("checker readiness timed out")
+
+	// scheduleUpdaterReplacement schedules deferred self-update replacement on Windows.
+	// It is variable-backed to allow deterministic tests.
+	scheduleUpdaterReplacement = scheduleWindowsUpdaterReplacement
+)
+
+// stagedArtifact describes one downloaded and verified artifact in a transaction.
+type stagedArtifact struct {
+	// Name is the local artifact file name inside installation root.
+	Name string
+	// Kind describes whether artifact is executable or configuration.
+	Kind ArtifactKind
+	// RemoteName is the file path served by update repository.
+	RemoteName string
+	// Size is expected artifact length in bytes.
+	Size int64
+	// SHA512 is expected base64-encoded SHA-512 checksum.
+	SHA512 string
+	// Revision is configuration revision for config artifacts.
+	Revision uint64
+	// StagedPath is absolute path to downloaded artifact in staging directory.
+	StagedPath string
 }
 
-// runner holds the mutable state and helpers for a single update execution.
-// It is intentionally unexported—call Run(ctx, Options) from callers.
+// updatePlan is the resolved set of version/config/binary changes to apply.
+type updatePlan struct {
+	// DesiredVersion is the version persisted after successful update.
+	DesiredVersion string
+	// ConfigRevision is target config revision from manifest.
+	ConfigRevision uint64
+	// ConfigSHA512 is target config checksum from manifest.
+	ConfigSHA512 string
+
+	// Binaries are executable artifacts that require replacement.
+	Binaries []*stagedArtifact
+	// Config is optional config artifact replacement.
+	Config *stagedArtifact
+
+	// NextConfig is parsed staged config used for post-restart verification.
+	NextConfig *config.Config
+}
+
+// deferredUpdaterReplacement carries updater self-replacement parameters.
+type deferredUpdaterReplacement struct {
+	// ArtifactName is manifest file name for updater executable.
+	ArtifactName string
+	// StagedPath is absolute path to staged updater executable.
+	StagedPath string
+	// TargetPath is absolute path to installed updater executable.
+	TargetPath string
+}
+
+// hasChanges reports whether plan has binary or config modifications.
+func (p *updatePlan) hasChanges() bool {
+	return len(p.Binaries) > 0 || p.Config != nil
+}
+
+// runner encapsulates a single updater execution lifecycle.
 type runner struct {
-	description        *Description      // Remote manifest describing the release.
-	cfg                *config.Config    // Connection configuration loaded from YAML.
-	localVersion       string            // Detected local version.
-	IsUpdateNeeded     bool              // Whether client files differ from server checksums.
-	temporaryDirectory string            // Where new files are downloaded before apply.
-	downloadedFiles    map[string]string // Logical name -> local temp path.
+	// role identifies updater role (client/server).
+	role Role
+	// spec defines role-specific executable/config contracts.
+	spec *RoleSpec
+
+	// installRoot is absolute directory with managed executables and state.
+	installRoot string
+	// configPath is absolute path to managed configuration file.
+	configPath string
+	// statePath is absolute path to updater local state file.
+	statePath string
+
+	// cfg is currently active runtime configuration.
+	cfg *config.Config
+	// manifest is currently fetched and verified desired state.
+	manifest *Manifest
+	// state is currently loaded local updater state.
+	state *UpdateState
+
+	// httpClient is used for repository downloads/probes.
+	httpClient *http.Client
+
+	// allowDowngrade allows binary version downgrade relative to local version.
+	allowDowngrade bool
+	// allowConfigRollback allows config revision rollback.
+	allowConfigRollback bool
+
+	// trustedManifestKeys are accepted public keys for manifest verification.
+	trustedManifestKeys map[string]ed25519.PublicKey
 }
 
-// Run executes the updater lifecycle and is the public entry point for the CLI.
+// roleExecutablePath returns role executable absolute path.
+func (r *runner) roleExecutablePath() string {
+	return filepath.Join(r.installRoot, r.spec.Executable)
+}
+
+// rolePIDFilePath returns role PID file absolute path.
+func (r *runner) rolePIDFilePath() string {
+	return filepath.Join(r.installRoot, r.spec.PIDFile)
+}
+
+// Run executes updater lifecycle.
 func Run(ctx context.Context, opts *Options) error {
-	// Set context with logger name for tracking.
 	ctx = logger.WithName(ctx, "alarm-updater")
 
-	up, err := newRunner(ctx, opts)
+	if opts == nil {
+		return errUpdaterOptionsRequired
+	}
+
+	role, err := parseRole(opts.UpdateType)
 	if err != nil {
 		return err
 	}
 
-	defer up.cleanup(ctx)
-
-	if err = up.Run(ctx); err != nil {
-		logger.ErrorKV(ctx, "Updater run failed", "error", err)
-		return err
-	}
-
-	logger.Info(ctx, "Updater completed")
-
-	return nil
-}
-
-// newRunner prepares the run and writes a marker to avoid concurrent runs.
-// It also ensures we can reach the server before doing any work.
-func newRunner(ctx context.Context, opts *Options) (*runner, error) {
-	u := &runner{
-		downloadedFiles: make(map[string]string, defaultMapCapacity),
-	}
-
-	if IsUpdaterRunningNow(ctx) {
-		return u, errUpdaterAlreadyRunning
-	}
-
-	updateMarker, err := os.Create(MarkerFilename)
-	if err != nil {
-		return u, err
-	}
-
-	if err = updateMarker.Close(); err != nil {
-		return u, err
-	}
-
-	configPath := opts.ConfigPath
-	if configPath == "" {
-		configPath = config.DefaultConfigFilename
-	}
-
-	var settings *config.Config
-
-	settings, err = config.Load(configPath)
-	if err != nil {
-		return u, err
-	}
-
-	settings.UpdateType = strings.TrimSpace(opts.UpdateType)
-	u.cfg = settings
-
-	if err = u.ensureServerReachable(ctx); err != nil {
-		return u, err
-	}
-
-	return u, nil
-}
-
-// Run executes the enhanced workflow for this runner instance:
-// 1) Stop known processes.
-// 2) Detect local version.
-// 3) Fetch remote manifest.
-// 4) Compare versions.
-// 5) Verify checksums.
-// 6) Download and apply files if needed.
-// 7) Start the target executable.
-func (u *runner) Run(ctx context.Context) error {
-	// Preparation.
-	if err := u.prepareForUpdate(ctx); err != nil {
-		return err
-	}
-
-	// Determine if update is needed.
-	versionUpdateNeeded, err := u.determineUpdateNeeded(ctx)
+	installRoot, err := resolveInstallRoot(opts.InstallRoot)
 	if err != nil {
 		return err
 	}
 
-	// Execute update if needed.
-	if err = u.executeUpdateIfNeeded(ctx, versionUpdateNeeded); err != nil {
-		return err
-	}
+	lockPath := filepath.Join(installRoot, UpdateLockFilename)
 
-	// Start required executables.
-	logger.Info(ctx, "Starting required executables")
-
-	if err = u.startRequiredExecutables(ctx); err != nil {
-		return fmt.Errorf("start required executables: %w", err)
-	}
-
-	return nil
-}
-
-// prepareForUpdate handles the initial preparation steps for the update process.
-func (u *runner) prepareForUpdate(ctx context.Context) error {
-	logger.Info(ctx, "Terminating alarm button processes forcibly")
-
-	if err := u.terminateAlarmButtonProcesses(); err != nil {
-		return fmt.Errorf("terminate alarm button processes: %w", err)
-	}
-
-	logger.Info(ctx, "Detecting local version from installed executable")
-
-	if err := u.detectAndSetLocalVersion(ctx); err != nil {
-		return fmt.Errorf("detect local version: %w", err)
-	}
-
-	logger.Info(ctx, "Downloading the update description from the server")
-
-	if err := u.fillUpdateDescription(); err != nil {
-		return fmt.Errorf("download update description: %w", err)
-	}
-
-	return nil
-}
-
-// detectAndSetLocalVersion detects the local version and stores it for later use.
-func (u *runner) detectAndSetLocalVersion(ctx context.Context) error {
-	localVersion, err := u.detectLocalVersion(ctx)
-	if err != nil {
-		return err
-	}
-
-	u.localVersion = localVersion
-
-	return nil
-}
-
-// determineUpdateNeeded checks if an update is required based on version and checksum comparison.
-func (u *runner) determineUpdateNeeded(ctx context.Context) (bool, error) {
-	remoteVersion := u.description.VersionNumber
-	versionUpdateNeeded := u.compareVersions(ctx, u.localVersion, remoteVersion)
-
-	logger.Info(ctx, "Verifying the checksum of files on the client and server")
-
-	if err := u.validateChecksum(); err != nil {
-		return false, fmt.Errorf("validate checksum: %w", err)
-	}
-
-	return versionUpdateNeeded, nil
-}
-
-// executeUpdateIfNeeded performs the update process if either version or file updates are needed.
-func (u *runner) executeUpdateIfNeeded(ctx context.Context, versionUpdateNeeded bool) error {
-	if !versionUpdateNeeded && !u.IsUpdateNeeded {
-		logger.Info(ctx, "No update required - version and files are current")
-		return nil
-	}
-
-	u.logUpdateReasons(ctx, versionUpdateNeeded)
-
-	logger.Info(ctx, "Downloading update files to a temporary folder")
-
-	if err := u.downloadFiles(ctx); err != nil {
-		return fmt.Errorf("download update files: %w", err)
-	}
-
-	logger.Info(ctx, "Updating files on the client")
-
-	if err := u.updateFiles(ctx); err != nil {
-		return fmt.Errorf("update files on client: %w", err)
-	}
-
-	return nil
-}
-
-// logUpdateReasons logs the reasons why an update is needed.
-func (u *runner) logUpdateReasons(ctx context.Context, versionUpdateNeeded bool) {
-	if versionUpdateNeeded {
-		logger.InfoKV(ctx, "Version update required", "reason", "version_mismatch")
-	}
-
-	if u.IsUpdateNeeded {
-		logger.InfoKV(ctx, "File update required", "reason", "checksum_mismatch")
-	}
-}
-
-// detectLocalVersion runs the appropriate executable to get the current version.
-func (u *runner) detectLocalVersion(ctx context.Context) (string, error) {
-	var executable string
-
-	switch u.cfg.UpdateType {
-	case "client":
-		executable = checkerExecutable()
-	case "server":
-		executable = serverExecutable()
-	default:
-		return "", fmt.Errorf("%w: %s", errUnknownUpdateType, u.cfg.UpdateType)
-	}
-
-	// Create a context with timeout to avoid hanging
-	cmdCtx, cancel := context.WithTimeout(ctx, versionCommandTimeout)
-	defer cancel()
-
-	// Try to execute: alarm-checker version OR alarm-server version
-	cmd := exec.CommandContext(cmdCtx, executable, "version")
-
-	output, err := cmd.Output()
-	if err != nil {
-		logger.Warnf(ctx, "Could not get local version from %s: %v", executable, err)
-		return "", nil // Not an error - might be first install
-	}
-
-	// Parse version from output
-	return parseVersionFromOutput(string(output))
-}
-
-// parseVersionFromOutput extracts semantic version from executable version output.
-func parseVersionFromOutput(output string) (string, error) {
-	// Parse "version: 1.0.0, commit: abc123, built at: ..." → "1.0.0"
-	output = strings.TrimSpace(output)
-	if strings.HasPrefix(output, "version: ") {
-		parts := strings.Split(output, ",")
-		if len(parts) > 0 {
-			version := strings.TrimSpace(strings.TrimPrefix(parts[0], "version: "))
-			if version != "" {
-				return version, nil
-			}
-		}
-	}
-
-	return "", errInvalidVersionOutput
-}
-
-// compareVersions compares local vs remote versions and logs the decision.
-func (u *runner) compareVersions(ctx context.Context, localVersion, remoteVersion string) bool {
-	if localVersion == "" {
-		logger.Info(ctx, "No local version detected, update needed")
-		return true
-	}
-
-	if localVersion != remoteVersion {
-		logger.InfoKV(ctx, "Version mismatch detected",
-			"local", localVersion, "remote", remoteVersion)
-
-		return true
-	}
-
-	logger.InfoKV(ctx, "Versions match, checking file integrity",
-		"version", localVersion)
-
-	// Still check checksums for integrity.
-	return false
-}
-
-// ensureServerReachable verifies that the server is reachable and responsive.
-func (u *runner) ensureServerReachable(ctx context.Context) error {
-	if u.cfg == nil {
-		return errSettingsNotInitialised
-	}
-
-	actor, err := common.DetectActor()
-	if err != nil {
-		return err
-	}
-
-	var client *common.Client
-
-	client, err = common.Dial(ctx, u.cfg.ServerAddress, common.WithCallTimeout(u.cfg.Timeout))
+	lock, err := acquireUpdateLock(lockPath)
 	if err != nil {
 		return err
 	}
 
 	defer func() {
-		_ = client.Close()
+		if releaseErr := lock.Release(); releaseErr != nil {
+			logger.ErrorKV(ctx, "Failed to release update lock", "error", releaseErr)
+		}
 	}()
 
-	if _, err = client.GetAlarmState(ctx, actor); err != nil {
-		return err
-	}
-
-	logger.InfoKV(ctx, "Connected to alarm server", "address", u.cfg.ServerAddress)
-
-	return nil
-}
-
-// terminateAlarmButtonProcesses kills known binaries before update.
-func (u *runner) terminateAlarmButtonProcesses() error {
-	executableFiles := sliceToSet(FilesWithChecksum())
-
-	processList, err := ps.Processes()
+	updaterRunner, err := newRunner(role, opts, installRoot)
 	if err != nil {
 		return err
 	}
 
-	thisProcessID := os.Getpid()
-
-	for _, process := range processList {
-		processID := process.Pid()
-		if processID == thisProcessID {
-			continue
-		}
-
-		processName := process.Executable()
-		if _, found := executableFiles[processName]; !found {
-			continue
-		}
-
-		var runningProcess *os.Process
-
-		runningProcess, err = os.FindProcess(processID)
-		if err != nil {
-			return err
-		}
-
-		if err = runningProcess.Kill(); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return updaterRunner.run(ctx)
 }
 
-// fillUpdateDescription downloads and parses the remote update manifest.
-func (u *runner) fillUpdateDescription() error {
-	response, err := u.getFileBodyFromServer(context.Background(), VersionFilename)
-	if response != nil {
-		defer func() {
-			_ = response.Body.Close()
-		}()
-	}
-
-	if err != nil {
-		return err
-	}
-
-	data, err := io.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
-
-	var desc Description
-	if err = yaml.Unmarshal(data, &desc); err != nil {
-		return err
-	}
-
-	u.description = &desc
-
-	return nil
-}
-
-// getFileBodyFromServer fetches a file from the update server folder.
-func (u *runner) getFileBodyFromServer(ctx context.Context, fileName string) (*http.Response, error) {
-	serverUpdateURL, err := url.Parse(u.cfg.ServerUpdateFolder)
+// newRunner builds an updater runner with resolved paths and loaded state.
+func newRunner(role Role, opts *Options, installRoot string) (*runner, error) {
+	spec, err := localRoleSpec(role)
 	if err != nil {
 		return nil, err
 	}
 
-	// Use path.Join to normalize duplicate slashes when composing the URL path.
-	serverUpdateURL.Path = path.Join(serverUpdateURL.Path, fileName)
-	finalURL := serverUpdateURL.String()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, finalURL, http.NoBody)
+	configPath, err := resolveConfigPath(opts.ConfigPath, installRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	response, err := http.DefaultClient.Do(req)
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		return response, err
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	statePath := filepath.Join(installRoot, UpdateStateFilename)
+
+	state, err := loadUpdateState(statePath)
+	if err != nil {
+		return nil, err
+	}
+
+	clientTimeout := cfg.Timeout
+	if clientTimeout <= 0 {
+		clientTimeout = config.DefaultTimeout
+	}
+
+	return &runner{
+		role:        role,
+		spec:        spec,
+		installRoot: installRoot,
+		configPath:  configPath,
+		statePath:   statePath,
+		cfg:         cfg,
+		state:       state,
+		httpClient: &http.Client{
+			Timeout: clientTimeout,
+		},
+		allowDowngrade:      opts.AllowDowngrade,
+		allowConfigRollback: opts.AllowConfigRollback,
+		trustedManifestKeys: trustedManifestKeysForOptions(opts),
+	}, nil
+}
+
+// resolveInstallRoot resolves installation root from override or updater executable path.
+func resolveInstallRoot(override string) (string, error) {
+	if override != "" {
+		if !filepath.IsAbs(override) {
+			abs, err := filepath.Abs(override)
+			if err != nil {
+				return "", fmt.Errorf("resolve install root: %w", err)
+			}
+
+			return filepath.Clean(abs), nil
+		}
+
+		return filepath.Clean(override), nil
+	}
+
+	executablePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve updater executable path: %w", err)
+	}
+
+	resolvedExecutablePath, err := filepath.EvalSymlinks(executablePath)
+	if err != nil {
+		resolvedExecutablePath = executablePath
+	}
+
+	installRoot := filepath.Dir(filepath.Clean(resolvedExecutablePath))
+	if installRoot == "" {
+		return "", errInstallRootIsRequired
+	}
+
+	return installRoot, nil
+}
+
+// resolveConfigPath resolves effective config path for updater run.
+func resolveConfigPath(rawPath, installRoot string) (string, error) {
+	if installRoot == "" {
+		return "", errInstallRootIsRequired
+	}
+
+	if rawPath == "" || rawPath == config.DefaultConfigFilename {
+		return filepath.Join(installRoot, config.DefaultConfigFilename), nil
+	}
+
+	if filepath.IsAbs(rawPath) {
+		return filepath.Clean(rawPath), nil
+	}
+
+	abs, err := filepath.Abs(rawPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve config path: %w", err)
+	}
+
+	return filepath.Clean(abs), nil
+}
+
+// trustedManifestKeysForOptions returns trusted keys with optional runtime override.
+func trustedManifestKeysForOptions(opts *Options) map[string]ed25519.PublicKey {
+	if len(opts.TrustedManifestKeys) == 0 {
+		return trustedUpdatePublicKeys
+	}
+
+	cloned := make(map[string]ed25519.PublicKey, len(opts.TrustedManifestKeys))
+	for keyID, key := range opts.TrustedManifestKeys {
+		cloned[keyID] = append(ed25519.PublicKey(nil), key...)
+	}
+
+	return cloned
+}
+
+// run executes full updater flow: fetch, verify, plan, apply, and persist state.
+//
+//nolint:cyclop,funlen // Update runner intentionally keeps workflow order explicit.
+func (r *runner) run(ctx context.Context) error {
+	manifestBytes, signatureBytes, err := r.fetchManifestAndSignature(ctx)
+	if err != nil {
+		return err
+	}
+
+	err = r.verifyManifest(manifestBytes, signatureBytes)
+	if err != nil {
+		return err
+	}
+
+	manifest, err := r.parseManifest(manifestBytes)
+	if err != nil {
+		return err
+	}
+
+	err = manifest.Validate(r.spec)
+	if err != nil {
+		return err
+	}
+
+	r.manifest = manifest
+
+	plan, err := r.planUpdate(ctx)
+	if err != nil {
+		return err
+	}
+
+	if !plan.hasChanges() {
+		logger.Info(ctx, "No update required")
+		return r.persistUpdateState(plan)
+	}
+
+	transactionDir, err := os.MkdirTemp(r.installRoot, ".update-transaction-*")
+	if err != nil {
+		return fmt.Errorf("create transaction directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(transactionDir) }()
+
+	stagingDir := filepath.Join(transactionDir, "staged")
+	backupDir := filepath.Join(transactionDir, "backup")
+
+	err = os.MkdirAll(stagingDir, 0o700)
+	if err != nil {
+		return fmt.Errorf("create staging directory: %w", err)
+	}
+
+	err = os.MkdirAll(backupDir, 0o700)
+	if err != nil {
+		return fmt.Errorf("create backup directory: %w", err)
+	}
+
+	err = r.downloadArtifacts(ctx, stagingDir, plan)
+	if err != nil {
+		return err
+	}
+
+	err = r.preflightConfig(ctx, plan)
+	if err != nil {
+		return err
+	}
+
+	err = r.applyTransaction(ctx, backupDir, plan)
+	if err != nil {
+		return err
+	}
+
+	return r.persistUpdateState(plan)
+}
+
+// parseManifest decodes manifest YAML with strict field validation.
+func (r *runner) parseManifest(data []byte) (*Manifest, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+
+	var manifest Manifest
+	if err := decoder.Decode(&manifest); err != nil {
+		return nil, fmt.Errorf("decode manifest: %w", err)
+	}
+
+	return &manifest, nil
+}
+
+// fetchManifestAndSignature downloads signed manifest payload and detached signature.
+func (r *runner) fetchManifestAndSignature(ctx context.Context) ([]byte, []byte, error) {
+	manifestBytes, err := r.downloadBoundedFile(ctx, VersionFilename, maxManifestSize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("download manifest: %w", err)
+	}
+
+	signatureBytes, err := r.downloadBoundedFile(ctx, SignatureFilename, 4*1024)
+	if err != nil {
+		return nil, nil, fmt.Errorf("download signature: %w", err)
+	}
+
+	return manifestBytes, signatureBytes, nil
+}
+
+// downloadBoundedFile downloads repository file with explicit size limit.
+func (r *runner) downloadBoundedFile(ctx context.Context, name string, maxBytes int64) ([]byte, error) {
+	resp, err := r.getFileBodyFromServer(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	reader := io.LimitReader(resp.Body, maxBytes+1)
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	if int64(len(data)) > maxBytes {
+		return nil, errManifestTooLarge
+	}
+
+	return data, nil
+}
+
+// getFileBodyFromServer sends repository download request for one artifact file.
+func (r *runner) getFileBodyFromServer(ctx context.Context, fileName string) (*http.Response, error) {
+	baseURL, err := url.Parse(r.cfg.ServerUpdateFolder)
+	if err != nil {
+		return nil, fmt.Errorf("parse update URL: %w", err)
+	}
+
+	if baseURL.Scheme == "http" && !r.cfg.AllowInsecureUpdateURL && !r.isLoopbackHost(baseURL.Hostname()) {
+		return nil, errInsecureUpdateURLNotAllowed
+	}
+
+	baseURL.Path = path.Join(baseURL.Path, fileName)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String(), http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+
+	response, err := r.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", fileName, err)
 	}
 
 	if response.StatusCode != http.StatusOK {
-		return response, fmt.Errorf("%s, %s: %w", finalURL, response.Status, errBadHTTPStatus)
+		defer func() { _ = response.Body.Close() }()
+		return nil, fmt.Errorf("%w for %s: %s", errBadDownloadStatus, fileName, response.Status)
 	}
 
-	return response, err
+	return response, nil
 }
 
-// ValidateChecksum compares local and server checksums to decide whether an update is required.
-// It returns early on the first mismatch to avoid unnecessary I/O when an update
-// is already known to be needed.
-func (u *runner) validateChecksum() error {
-	if u.description == nil {
-		return errEmptyDescription
+// planUpdate resolves desired binaries/config and policy checks against local state.
+//
+//nolint:cyclop // Update planning combines version, checksum, and rollback policy checks.
+func (r *runner) planUpdate(ctx context.Context) (*updatePlan, error) {
+	cfgMeta := r.manifest.Configuration[r.role]
+	if cfgMeta == nil {
+		return nil, fmt.Errorf("configuration metadata for role %q: %w", r.role, errConfigArtifactMissing)
 	}
 
-	files, ok := u.description.Roles[u.cfg.UpdateType]
-	if !ok {
-		return fmt.Errorf("role %s: %w", u.cfg.UpdateType, errNoRoleFiles)
+	plan := &updatePlan{
+		ConfigRevision: cfgMeta.Revision,
+		ConfigSHA512:   cfgMeta.SHA512,
 	}
 
-	for _, fileName := range files {
-		needsUpdate, err := u.validateFileChecksum(fileName)
+	localVersion, err := r.detectLocalVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	manifestHasRoleBinaries, err := r.collectBinaryUpdates(plan)
+	if err != nil {
+		return nil, err
+	}
+
+	err = r.validateBinaryVersionPolicy(localVersion, manifestHasRoleBinaries)
+	if err != nil {
+		return nil, err
+	}
+
+	plan.DesiredVersion = r.resolveDesiredVersion(localVersion, manifestHasRoleBinaries)
+
+	if r.state.ConfigRevision == cfgMeta.Revision && r.state.ConfigSHA512 != "" &&
+		r.state.ConfigSHA512 != cfgMeta.SHA512 {
+		return nil, errConfigRevisionReused
+	}
+
+	if cfgMeta.Revision < r.state.ConfigRevision && !r.allowConfigRollback {
+		return nil, errConfigRollbackRejected
+	}
+
+	localConfigChecksum, err := r.checksumPathBase64(r.configPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("checksum local config: %w", err)
+	}
+
+	if localConfigChecksum != cfgMeta.SHA512 || r.state.ConfigRevision != cfgMeta.Revision {
+		plan.Config = &stagedArtifact{
+			Name:       config.DefaultConfigFilename,
+			Kind:       ArtifactKindConfig,
+			RemoteName: cfgMeta.Artifact,
+			Size:       cfgMeta.Size,
+			SHA512:     cfgMeta.SHA512,
+			Revision:   cfgMeta.Revision,
+		}
+	}
+
+	return plan, nil
+}
+
+// collectBinaryUpdates compares local role binaries with manifest checksums.
+func (r *runner) collectBinaryUpdates(plan *updatePlan) (bool, error) {
+	manifestHasRoleBinaries := false
+
+	for _, fileName := range r.spec.Files {
+		artifact, exists := r.manifest.Artifacts[fileName]
+		if !exists {
+			continue
+		}
+
+		if artifact == nil {
+			return false, fmt.Errorf("%w: %q", errUnexpectedArtifact, fileName)
+		}
+
+		manifestHasRoleBinaries = true
+		localArtifactPath := filepath.Join(r.installRoot, fileName)
+
+		localChecksum, checksumErr := r.checksumPathBase64(localArtifactPath)
+		if checksumErr != nil && !errors.Is(checksumErr, os.ErrNotExist) {
+			return false, fmt.Errorf("checksum local artifact %q: %w", localArtifactPath, checksumErr)
+		}
+
+		if localChecksum == artifact.SHA512 {
+			continue
+		}
+
+		plan.Binaries = append(plan.Binaries, &stagedArtifact{
+			Name:       fileName,
+			Kind:       ArtifactKindExecutable,
+			RemoteName: fileName,
+			Size:       artifact.Size,
+			SHA512:     artifact.SHA512,
+		})
+	}
+
+	return manifestHasRoleBinaries, nil
+}
+
+// validateBinaryVersionPolicy enforces downgrade policy for binary-changing updates.
+func (r *runner) validateBinaryVersionPolicy(
+	localVersion string,
+	manifestHasRoleBinaries bool,
+) error {
+	if !manifestHasRoleBinaries || localVersion == "" {
+		return nil
+	}
+
+	comparison, compareErr := r.compareSemVer(r.manifest.Version, localVersion)
+	if compareErr != nil {
+		return fmt.Errorf("compare local and remote versions: %w", compareErr)
+	}
+
+	if comparison < 0 && !r.allowDowngrade {
+		return errBinaryDowngradeRejected
+	}
+
+	return nil
+}
+
+// resolveDesiredVersion computes persisted app version for binary or config-only updates.
+func (r *runner) resolveDesiredVersion(
+	localVersion string,
+	manifestHasRoleBinaries bool,
+) string {
+	if manifestHasRoleBinaries {
+		return r.manifest.Version
+	}
+
+	if localVersion != "" {
+		return localVersion
+	}
+
+	if r.state.ApplicationVersion != "" {
+		return r.state.ApplicationVersion
+	}
+
+	return r.manifest.Version
+}
+
+// checksumPathBase64 returns base64-encoded SHA-512 of file contents.
+func (r *runner) checksumPathBase64(path string) (string, error) {
+	file, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+
+	hasher := sha512.New()
+	if _, err = io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+
+	return base64.StdEncoding.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// downloadArtifacts downloads all planned binary/config artifacts into staging directory.
+func (r *runner) downloadArtifacts(ctx context.Context, stagingDir string, plan *updatePlan) error {
+	root, err := os.OpenRoot(stagingDir)
+	if err != nil {
+		return fmt.Errorf("open staging root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	for _, artifact := range plan.Binaries {
+		if artifact == nil {
+			continue
+		}
+
+		err = r.downloadArtifact(ctx, root, artifact)
 		if err != nil {
 			return err
 		}
+	}
 
-		if needsUpdate {
-			u.IsUpdateNeeded = true
-			return nil
+	if plan.Config != nil {
+		err = r.downloadArtifact(ctx, root, plan.Config)
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-// validateFileChecksum validates a single file's checksum against the server.
-// Returns true if the file needs updating, false if it's up to date.
-func (u *runner) validateFileChecksum(fileName string) (bool, error) {
-	serverChecksum, err := u.getServerChecksum(fileName)
-	if err != nil {
-		return false, err
+// downloadArtifact downloads one artifact and verifies size/checksum before staging.
+//
+//nolint:cyclop // Download path includes explicit integrity and fsync checks.
+func (r *runner) downloadArtifact(ctx context.Context, root *os.Root, artifact *stagedArtifact) error {
+	if !filepath.IsLocal(artifact.RemoteName) {
+		return fmt.Errorf("%q: %w", artifact.RemoteName, errUnsafeArtifactName)
 	}
 
-	clientChecksum, err := u.getClientChecksum(fileName)
+	response, err := r.getFileBodyFromServer(ctx, artifact.RemoteName)
 	if err != nil {
-		return false, err
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	file, err := root.Create(artifact.RemoteName)
+	if err != nil {
+		return fmt.Errorf("create staged file: %w", err)
 	}
 
-	return !bytes.Equal(serverChecksum, clientChecksum), nil
+	limited := io.LimitReader(response.Body, artifact.Size+1)
+	hasher := sha512.New()
+
+	written, copyErr := io.Copy(io.MultiWriter(file, hasher), limited)
+	if syncErr := file.Sync(); syncErr != nil && copyErr == nil {
+		copyErr = syncErr
+	}
+
+	if closeErr := file.Close(); closeErr != nil && copyErr == nil {
+		copyErr = closeErr
+	}
+
+	if copyErr != nil {
+		return fmt.Errorf("write staged file: %w", copyErr)
+	}
+
+	if written != artifact.Size {
+		return fmt.Errorf(
+			"%w for %s: got %d, want %d",
+			errArtifactSizeMismatch,
+			artifact.RemoteName,
+			written,
+			artifact.Size,
+		)
+	}
+
+	actualChecksum := base64.StdEncoding.EncodeToString(hasher.Sum(nil))
+	if actualChecksum != artifact.SHA512 {
+		return fmt.Errorf("%w for %s", errArtifactChecksumMismatch, artifact.RemoteName)
+	}
+
+	artifact.StagedPath = filepath.Join(root.Name(), artifact.RemoteName)
+
+	return nil
 }
 
-// getServerChecksum retrieves and decodes the server checksum for a file.
-func (u *runner) getServerChecksum(fileName string) ([]byte, error) {
-	serverFileBase64, hasDescription := u.description.Files[fileName]
-	if !hasDescription {
-		return nil, fmt.Errorf("checksum for %s: %w", fileName, errNoChecksum)
+// preflightConfig validates staged config and probes update source transition safety.
+func (r *runner) preflightConfig(ctx context.Context, plan *updatePlan) error {
+	if plan.Config == nil {
+		return nil
 	}
 
-	serverFileChecksum, err := base64.StdEncoding.DecodeString(serverFileBase64)
+	content, err := os.ReadFile(filepath.Clean(plan.Config.StagedPath))
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("read staged config: %w", err)
 	}
 
-	return serverFileChecksum, nil
-}
-
-// getClientChecksum retrieves the client checksum for a file.
-// Returns nil checksum if the file doesn't exist.
-func (u *runner) getClientChecksum(fileName string) ([]byte, error) {
-	if _, err := os.Stat(fileName); err != nil {
-		if os.IsNotExist(err) {
-			// File doesn't exist, needs update.
-			return nil, nil
-		}
-
-		return nil, err
-	}
-
-	return GetFileChecksum(fileName)
-}
-
-// downloadFiles downloads required files into a temporary directory.
-func (u *runner) downloadFiles(ctx context.Context) error {
-	temporaryDirectory, err := os.MkdirTemp("", "alarm-button-updater-")
+	nextCfg, err := config.Parse(content)
 	if err != nil {
 		return err
 	}
 
-	u.temporaryDirectory = temporaryDirectory
-
-	files := u.description.Roles[u.cfg.UpdateType]
-	for _, fileName := range files {
-		var response *http.Response
-
-		response, err = u.getFileBodyFromServer(ctx, fileName)
-		if err != nil {
-			if response != nil {
-				_ = response.Body.Close()
-			}
-
-			return err
-		}
-
-		outputFileName := filepath.Clean(filepath.Join(temporaryDirectory, fileName))
-
-		var outputFile *os.File
-
-		outputFile, err = os.Create(outputFileName)
-		if err != nil {
-			_ = response.Body.Close()
-
-			return err
-		}
-
-		_, err = io.Copy(outputFile, response.Body)
-		if err != nil {
-			_ = response.Body.Close()
-			_ = outputFile.Close()
-
-			return err
-		}
-
-		u.downloadedFiles[fileName] = outputFileName
-		logger.InfoKV(ctx, "Downloaded file", "path", outputFileName)
+	err = nextCfg.ValidateLocalEnvironment()
+	if err != nil {
+		return err
 	}
 
-	return nil
-}
+	plan.NextConfig = nextCfg
 
-// updateFiles applies downloaded files using go-update with checksum validation.
-func (u *runner) updateFiles(ctx context.Context) error {
-	for fileName, downloadedFileName := range u.downloadedFiles {
-		logger.InfoKV(ctx, "Updating file", "file", fileName)
-
-		data, err := os.ReadFile(downloadedFileName)
-		if err != nil {
-			return err
-		}
-
-		logger.Debug(ctx, "Looking for a checksum")
-
-		downloadedFileBase64, ok := u.description.Files[fileName]
-		if !ok {
-			return fmt.Errorf("checksum for %s: %w", downloadedFileName, errNoChecksum)
-		}
-
-		var downloadedFileChecksum []byte
-
-		downloadedFileChecksum, err = base64.StdEncoding.DecodeString(downloadedFileBase64)
-		if err != nil {
-			return err
-		}
-
-		if _, err = os.Stat(fileName); err != nil && os.IsNotExist(err) {
-			if _, err = os.Create(fileName); err != nil {
-				return err
-			}
-		}
-
-		logger.Debug(ctx, "Applying update")
-
-		options := &goupdate.Options{
-			TargetPath: fileName,
-			TargetMode: DefaultFileMode,
-			Checksum:   downloadedFileChecksum,
-			Hash:       DefaultChecksumFunction,
-		}
-
-		dataReader := bytes.NewReader(data)
-		if err = goupdate.Apply(dataReader, *options); err != nil {
-			return err
-		}
-
-		oldFileName := fileName + ".old"
-		if _, err = os.Stat(oldFileName); err == nil {
-			_ = os.Remove(oldFileName)
+	if nextCfg.ServerUpdateFolder != r.cfg.ServerUpdateFolder {
+		probeErr := r.probeUpdateSource(ctx, nextCfg.ServerUpdateFolder, nextCfg.Timeout)
+		if probeErr != nil {
+			return fmt.Errorf("new update source preflight failed: %w", probeErr)
 		}
 	}
 
 	return nil
 }
 
-// startRequiredExecutables launches the role-specific binary according to the manifest.
-func (u *runner) startRequiredExecutables(ctx context.Context) error {
-	if u.description == nil {
-		return errEmptyDescription
+// probeUpdateSource validates that next update source can serve signed manifest.
+func (r *runner) probeUpdateSource(ctx context.Context, rawURL string, timeout time.Duration) error {
+	if rawURL == "" {
+		return nil
 	}
 
-	executable, ok := u.description.Executables[u.cfg.UpdateType]
-	if !ok {
-		return fmt.Errorf("role %s: %w", u.cfg.UpdateType, errNoRoleExecutable)
+	if timeout <= 0 {
+		timeout = config.DefaultTimeout
 	}
 
-	logger.InfoKV(ctx, "Starting executable", "executable", executable)
+	baseURL, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
 
-	osLC := strings.ToLower(runtime.GOOS)
-	switch {
-	case strings.Contains(osLC, "linux") || strings.Contains(osLC, "darwin"):
-		return exec.CommandContext(ctx, executable).Start()
-	case strings.Contains(osLC, "windows"):
-		return exec.CommandContext(ctx, "cmd.exe", "/C", "start", executable).Start()
+	baseURL.Path = path.Join(baseURL.Path, VersionFilename)
+
+	client := &http.Client{Timeout: timeout}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, baseURL.String(), http.NoBody)
+	if err != nil {
+		return err
+	}
+
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("%w: %s", errUnexpectedProbeStatus, response.Status)
+	}
+
+	return nil
+}
+
+// backupEntry stores rollback metadata for one target file.
+type backupEntry struct {
+	// TargetPath is absolute install path for artifact target.
+	TargetPath string
+	// Exists indicates whether target existed before transaction.
+	Exists bool
+	// BackupPath is path to backup copy when target existed.
+	BackupPath string
+	// Mode is original file mode preserved for rollback.
+	Mode fs.FileMode
+	// Kind is artifact kind used by rollback strategy.
+	Kind ArtifactKind
+}
+
+// prepareBackups snapshots targets before in-place replacement for rollback safety.
+func (r *runner) prepareBackups(
+	backupDir string,
+	artifacts []*stagedArtifact,
+) (map[string]*backupEntry, error) {
+	backups := make(map[string]*backupEntry, len(artifacts))
+
+	for _, artifact := range artifacts {
+		if artifact == nil {
+			continue
+		}
+
+		targetPath, err := r.targetPathForArtifact(artifact)
+		if err != nil {
+			return nil, err
+		}
+
+		entry := &backupEntry{
+			TargetPath: targetPath,
+			Kind:       artifact.Kind,
+			Mode:       config.DefaultFilePermissions,
+		}
+
+		info, err := os.Stat(targetPath)
+		if err == nil {
+			entry.Exists = true
+			entry.Mode = info.Mode()
+			entry.BackupPath = filepath.Join(backupDir, filepath.Base(targetPath)+".bak")
+
+			content, readErr := os.ReadFile(filepath.Clean(targetPath))
+			if readErr != nil {
+				return nil, fmt.Errorf("read backup source %q: %w", targetPath, readErr)
+			}
+
+			if writeErr := fsutil.WriteFileAtomic(entry.BackupPath, content, info.Mode()); writeErr != nil {
+				return nil, fmt.Errorf("write backup %q: %w", entry.BackupPath, writeErr)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("stat target %q: %w", targetPath, err)
+		}
+
+		backups[targetPath] = entry
+	}
+
+	return backups, nil
+}
+
+// applyTransaction applies plan with rollback on any failure.
+//
+//nolint:cyclop,funlen,gocognit // Transaction flow is intentionally linear for rollback safety.
+func (r *runner) applyTransaction(ctx context.Context, backupDir string, plan *updatePlan) (retErr error) {
+	order := r.deterministicApplyOrder()
+
+	targets, deferredUpdater, err := r.collectApplyTargets(plan, order)
+	if err != nil {
+		return err
+	}
+
+	backups, err := r.prepareBackups(backupDir, targets)
+	if err != nil {
+		return err
+	}
+
+	stopped := false
+
+	var startedProcess *os.Process
+
+	defer func() {
+		if retErr == nil {
+			return
+		}
+
+		if stopErr := r.stopStartedProcess(startedProcess); stopErr != nil {
+			retErr = fmt.Errorf("%w; stop failed new process: %w", retErr, stopErr)
+		}
+
+		if rollbackErr := r.rollbackTargets(targets, backups); rollbackErr != nil {
+			retErr = fmt.Errorf("%w; rollback failed: %w", retErr, rollbackErr)
+			return
+		}
+
+		if stopped {
+			_, startErr := r.startExecutable()
+			if startErr != nil {
+				retErr = fmt.Errorf("%w; restart old process failed: %w", retErr, startErr)
+			}
+		}
+	}()
+
+	err = r.stopProcessByPIDFile()
+	if err != nil {
+		return err
+	}
+
+	stopped = true
+
+	for _, artifact := range targets {
+		if artifact == nil {
+			continue
+		}
+
+		targetPath, targetErr := r.targetPathForArtifact(artifact)
+		if targetErr != nil {
+			return targetErr
+		}
+
+		switch artifact.Kind {
+		case ArtifactKindExecutable:
+			err = r.applyExecutable(
+				artifact.StagedPath,
+				targetPath,
+				artifact.SHA512,
+				defaultExecutablePerm,
+			)
+			if err != nil {
+				return fmt.Errorf("apply executable %q: %w", artifact.Name, err)
+			}
+		case ArtifactKindConfig:
+			content, readErr := os.ReadFile(filepath.Clean(artifact.StagedPath))
+			if readErr != nil {
+				return fmt.Errorf("read staged config: %w", readErr)
+			}
+
+			writeErr := fsutil.WriteFileAtomic(targetPath, content, config.DefaultFilePermissions)
+			if writeErr != nil {
+				return fmt.Errorf("replace config: %w", writeErr)
+			}
+		default:
+			return fmt.Errorf("%w %q", errUnsupportedApplyKind, artifact.Kind)
+		}
+	}
+
+	startedProcess, err = r.startExecutable()
+	if err != nil {
+		return fmt.Errorf("start role executable: %w", err)
+	}
+
+	err = r.verifyStart(ctx, plan, startedProcess)
+	if err != nil {
+		return err
+	}
+
+	if deferredUpdater != nil {
+		err = scheduleUpdaterReplacement(os.Getpid(), deferredUpdater.StagedPath, deferredUpdater.TargetPath)
+		if err != nil {
+			return fmt.Errorf("schedule deferred updater replacement for %q: %w", deferredUpdater.ArtifactName, err)
+		}
+	}
+
+	return nil
+}
+
+// collectApplyTargets orders apply targets and isolates deferred updater replacement.
+func (r *runner) collectApplyTargets(
+	plan *updatePlan,
+	order []string,
+) ([]*stagedArtifact, *deferredUpdaterReplacement, error) {
+	targets := make([]*stagedArtifact, 0, len(plan.Binaries)+1)
+	byName := make(map[string]*stagedArtifact, len(plan.Binaries))
+
+	for _, item := range plan.Binaries {
+		if item == nil {
+			continue
+		}
+
+		byName[item.Name] = item
+	}
+
+	var deferredUpdater *deferredUpdaterReplacement
+
+	for _, name := range order {
+		artifact, exists := byName[name]
+		if !exists {
+			continue
+		}
+
+		targetPath, err := r.targetPathForArtifact(artifact)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if r.shouldDeferUpdaterReplacement(artifact.Name) {
+			deferredUpdater = &deferredUpdaterReplacement{
+				ArtifactName: artifact.Name,
+				StagedPath:   artifact.StagedPath,
+				TargetPath:   targetPath,
+			}
+
+			continue
+		}
+
+		targets = append(targets, artifact)
+	}
+
+	if plan.Config != nil {
+		targets = append(targets, plan.Config)
+	}
+
+	return targets, deferredUpdater, nil
+}
+
+// shouldDeferUpdaterReplacement reports whether artifact is Windows updater executable.
+func (r *runner) shouldDeferUpdaterReplacement(artifactName string) bool {
+	if filepath.Ext(r.spec.Executable) != executableExtension(goosWindows) {
+		return false
+	}
+
+	updaterExecutableName := "alarm-updater" + executableExtension(goosWindows)
+
+	return artifactName == updaterExecutableName
+}
+
+// rollbackTargets restores original targets in reverse order.
+//
+//nolint:cyclop,gocognit // Rollback explicitly mirrors forward apply paths for reliability.
+func (r *runner) rollbackTargets(
+	targets []*stagedArtifact,
+	backups map[string]*backupEntry,
+) error {
+	for _, artifact := range slices.Backward(targets) {
+		if artifact == nil {
+			continue
+		}
+
+		targetPath, err := r.targetPathForArtifact(artifact)
+		if err != nil {
+			return err
+		}
+
+		backup := backups[targetPath]
+		if backup == nil || !backup.Exists {
+			removeErr := os.Remove(filepath.Clean(targetPath))
+			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return fmt.Errorf("remove new target %q: %w", targetPath, removeErr)
+			}
+
+			continue
+		}
+
+		switch backup.Kind {
+		case ArtifactKindExecutable:
+			checksum, checksumErr := r.checksumPathBase64(backup.BackupPath)
+			if checksumErr != nil {
+				return fmt.Errorf("checksum backup executable %q: %w", backup.BackupPath, checksumErr)
+			}
+
+			applyErr := r.applyExecutable(backup.BackupPath, targetPath, checksum, defaultExecutablePerm)
+			if applyErr != nil {
+				return fmt.Errorf("rollback executable %q: %w", targetPath, applyErr)
+			}
+		case ArtifactKindConfig:
+			content, readErr := os.ReadFile(filepath.Clean(backup.BackupPath))
+			if readErr != nil {
+				return fmt.Errorf("read config backup %q: %w", backup.BackupPath, readErr)
+			}
+
+			writeErr := fsutil.WriteFileAtomic(targetPath, content, config.DefaultFilePermissions)
+			if writeErr != nil {
+				return fmt.Errorf("rollback config %q: %w", targetPath, writeErr)
+			}
+		default:
+			return fmt.Errorf("%w %q", errUnsupportedRollbackKind, backup.Kind)
+		}
+	}
+
+	return nil
+}
+
+// applyExecutable applies executable replacement with checksum validation.
+func (r *runner) applyExecutable(stagedPath, targetPath, checksumB64 string, mode fs.FileMode) error {
+	checksum, err := base64.StdEncoding.DecodeString(checksumB64)
+	if err != nil {
+		return err
+	}
+
+	source, err := os.Open(filepath.Clean(stagedPath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = source.Close() }()
+
+	options := goupdate.Options{
+		TargetPath: targetPath,
+		TargetMode: mode,
+		Checksum:   checksum,
+		Hash:       crypto.SHA512,
+	}
+
+	return goupdate.Apply(source, options)
+}
+
+// verifyStart runs role-specific post-start readiness checks.
+func (r *runner) verifyStart(ctx context.Context, plan *updatePlan, startedProcess *os.Process) error {
+	switch r.role {
+	case RoleServer:
+		return r.verifyServerStart(ctx, plan)
+	case RoleClient:
+		return r.verifyCheckerStart(ctx, startedProcess)
 	default:
-		return fmt.Errorf("%s OS is not supported: %w", runtime.GOOS, errUnsupportedOS)
+		return nil
 	}
 }
 
-// cleanup removes temporary artifacts and the running marker.
-func (u *runner) cleanup(ctx context.Context) {
-	if _, err := os.Stat(MarkerFilename); err == nil {
-		_ = os.Remove(MarkerFilename)
+// verifyServerStart checks restarted server health via local gRPC endpoint.
+func (r *runner) verifyServerStart(ctx context.Context, plan *updatePlan) error {
+	settings := r.cfg
+	if plan.NextConfig != nil {
+		settings = plan.NextConfig
 	}
 
-	if u.temporaryDirectory != "" {
-		if _, err := os.Stat(u.temporaryDirectory); err == nil {
-			_ = os.RemoveAll(u.temporaryDirectory)
+	listenAddress := settings.ListenAddress
+	if listenAddress == "" {
+		listenAddress = config.DefaultListenAddress
+	}
+
+	listenAddress = r.normalizeListenAddressForDial(listenAddress)
+
+	client, err := common.NewClient(
+		listenAddress,
+		settings,
+		common.WithCallTimeout(settings.Timeout),
+	)
+	if err != nil {
+		return fmt.Errorf("verify server restart dial: %w", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	checkCtx, cancel := context.WithTimeout(ctx, settings.Timeout)
+	defer cancel()
+
+	err = client.CheckHealth(checkCtx, pb.AlarmService_ServiceDesc.ServiceName)
+	if err != nil {
+		return fmt.Errorf("verify server restart health: %w", err)
+	}
+
+	return nil
+}
+
+// verifyCheckerStart checks checker liveness and PID ownership after restart.
+func (r *runner) verifyCheckerStart(ctx context.Context, startedProcess *os.Process) error {
+	if startedProcess == nil {
+		return errCheckerExitedEarly
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, checkerReadinessMax)
+	defer cancel()
+
+	for {
+		ready, err := r.checkCheckerReadiness(startedProcess.Pid)
+		if err != nil {
+			return err
+		}
+
+		if ready {
+			return nil
+		}
+
+		select {
+		case <-checkCtx.Done():
+			return fmt.Errorf("%w: %s", errCheckerReadinessTimeout, checkerReadinessMax)
+		case <-time.After(checkerReadinessDelay):
 		}
 	}
+}
 
-	logger.Info(ctx, "The updater has been stopped")
+// checkCheckerReadiness validates checker PID file ownership and liveness.
+func (r *runner) checkCheckerReadiness(expectedPID int) (bool, error) {
+	pidPath := r.rolePIDFilePath()
+
+	pidFromFile, err := proc.Read(pidPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("read checker pid file: %w", err)
+		}
+
+		running, runningErr := isProcessRunning(expectedPID)
+		if runningErr != nil {
+			return false, runningErr
+		}
+
+		if !running {
+			return false, fmt.Errorf("%w: pid %d", errCheckerExitedEarly, expectedPID)
+		}
+
+		return false, nil
+	}
+
+	if pidFromFile != expectedPID {
+		return false, fmt.Errorf("%w: got %d, want %d", errCheckerPIDMismatch, pidFromFile, expectedPID)
+	}
+
+	running, err := isProcessRunning(expectedPID)
+	if err != nil {
+		return false, err
+	}
+
+	if !running {
+		return false, fmt.Errorf("%w: pid %d", errCheckerExitedEarly, expectedPID)
+	}
+
+	return true, nil
+}
+
+// persistUpdateState writes applied desired-state metadata for next runs.
+func (r *runner) persistUpdateState(plan *updatePlan) error {
+	next := &UpdateState{
+		Role:               r.role,
+		ApplicationVersion: plan.DesiredVersion,
+		ConfigRevision:     plan.ConfigRevision,
+		ConfigSHA512:       plan.ConfigSHA512,
+	}
+
+	if err := r.saveUpdateState(next); err != nil {
+		return err
+	}
+
+	r.state = next
+	if plan.NextConfig != nil {
+		r.cfg = plan.NextConfig
+	}
+
+	return nil
+}
+
+// isLoopbackHost reports whether host is localhost or loopback IP.
+func (r *runner) isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
+}
+
+// normalizeListenAddressForDial replaces wildcard hosts with local loopback addresses.
+func (r *runner) normalizeListenAddressForDial(address string) string {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address
+	}
+
+	switch host {
+	case "", "0.0.0.0":
+		return net.JoinHostPort("127.0.0.1", port)
+	case "::":
+		return net.JoinHostPort("::1", port)
+	default:
+		return address
+	}
 }

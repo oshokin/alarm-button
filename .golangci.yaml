@@ -26,10 +26,10 @@ linters:
   disable:                         # Disable specific linters that are too strict or not applicable.
     - containedctx                 # Allow context.Context in structs when needed for design.
     - contextcheck                 # Skip overly strict context usage checks.
-    - depguard                     # Handled separately in settings section below.
     - dupl                         # Allow some code duplication for clarity.
     - exhaustive                   # Don't require exhaustive enum handling in all switches.
     - exhaustruct                  # Don't require all struct fields to be initialized.
+    - exhaustruct_v5               # Don't require all struct fields to be initialized.
     - forcetypeassert              # Allow type assertions without error checking when safe.
     - gochecknoglobals             # Allow global variables when appropriate for design.
     - gomoddirectives              # Allow flexible go.mod directives.
@@ -61,7 +61,6 @@ linters:
     
     # Cyclomatic complexity analysis to identify overly complex functions.
     cyclop:
-      max-complexity: 10                   # Maximum cyclomatic complexity per function.
       package-average: 10                  # Maximum average complexity per package.
 
     # Dependency guard rules to enforce proper package usage patterns.
@@ -74,6 +73,8 @@ linters:
           deny:
             - pkg: github.com/golang/protobuf
               desc: Use google.golang.org/protobuf instead, see https://developers.google.com/protocol-buffers/docs/reference/go/faq#modules
+            - pkg: gopkg.in/yaml.v3$
+              desc: Use go.yaml.in/yaml/v3 instead for maintained module path
             - pkg: github.com/satori/go.uuid
               desc: Use github.com/google/uuid instead, satori's package is not maintained
             - pkg: github.com/gofrs/uuid$
@@ -98,10 +99,19 @@ linters:
         # Restrict direct zap usage to the logger package for centralized logging.
         "no-zap-outside-logger":
           files:
-            - "!internal/logger/**"        # Apply to all files except logger package.
+            - "!**/internal/logger/**"     # Apply to all files except logger package.
           deny:
             - pkg: go.uber.org/zap$
               desc: Use internal/logger helpers; direct zap usage is restricted to internal/logger
+
+        # Restrict insecure gRPC creds usage to centralized client transport policy.
+        "no-insecure-grpc-outside-common-client":
+          files:
+            - "!**/internal/service/common/client.go"
+            - "!$test"
+          deny:
+            - pkg: google.golang.org/grpc/credentials/insecure$
+              desc: Keep insecure transport exceptions centralized in internal/service/common/client.go
 
     # Check for problematic embedded struct field patterns.
     embeddedstructfieldcheck:
@@ -119,6 +129,10 @@ linters:
     # Function length limits to maintain readability.
     funlen:
       lines: 80                            # Maximum lines per function before flagging.
+
+    # Function and method order rules for consistent file layout.
+    funcorder:
+      function: true                       # Keep exported free functions above unexported ones.
 
     # Cognitive complexity analysis for mental load assessment.
     gocognit:
@@ -151,10 +165,8 @@ linters:
         nestingReduce:
           bodyWidth: 4                    # Suggest nesting reduction for bodies wider than 4 levels.
         rangeExprCopy:
-          sizeThreshold: 512              # Flag range expressions copying more than 512 bytes.
           skipTestFuncs: false            # Apply range copy checks to test functions.
         rangeValCopy:
-          sizeThreshold: 128              # Flag range values copying more than 128 bytes.
           skipTestFuncs: false            # Apply range value copy checks to test functions.
         tooManyResultsChecker:
           maxResults: 10                  # Flag functions returning more than 10 values.
@@ -249,7 +261,6 @@ linters:
 
   # Issue exclusion rules to reduce noise in specific scenarios.
   exclusions:
-    generated: lax                        # Relax rules for generated code.
     presets:                              # Use predefined exclusion sets.
       - comments                          # Exclude common comment-related false positives.
       - common-false-positives            # Exclude known false positive patterns.

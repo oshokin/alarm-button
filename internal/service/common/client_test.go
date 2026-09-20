@@ -7,13 +7,15 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/oshokin/alarm-button/internal/config"
 )
 
-// TestDial_ValidatesAddress verifies that Dial rejects empty addresses.
-func TestDial_ValidatesAddress(t *testing.T) {
+// TestNewClient_ValidatesAddress verifies that NewClient rejects empty addresses.
+func TestNewClient_ValidatesAddress(t *testing.T) {
 	t.Parallel()
 
-	c, err := Dial(context.Background(), "")
+	c, err := NewClient("", nil)
 	require.Error(t, err)
 	require.Nil(t, c)
 }
@@ -49,4 +51,18 @@ func TestSetAlarmState_NilActor(t *testing.T) {
 
 	_, err := c.SetAlarmState(context.Background(), nil, true)
 	require.Error(t, err)
+}
+
+// TestClientTransportCredentialsPolicy verifies transport credential policy matrix.
+func TestClientTransportCredentialsPolicy(t *testing.T) {
+	t.Parallel()
+
+	_, err := clientTransportCredentials("10.0.0.10:50051", &config.Config{})
+	require.Error(t, err)
+
+	_, err = clientTransportCredentials("10.0.0.10:50051", &config.Config{AllowInsecureRemote: true})
+	require.NoError(t, err)
+
+	_, err = clientTransportCredentials("127.0.0.1:50051", &config.Config{})
+	require.NoError(t, err)
 }

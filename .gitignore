@@ -17,6 +17,8 @@ __debug_bin
 alarm-button-update-marker.bin
 alarm-button-state.json
 alarm-button-version.yaml
+alarm-button-update-state.json
+alarm-button-update.lock
 
 # IDEs
 .vscode/

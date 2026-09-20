@@ -1,6 +1,3 @@
-// Package packager prepares the update manifest consumed by the updater.
-//
-// It computes checksums for platform-specific binaries, wires role-to-files
-// mappings, and persists connection settings. The resulting YAML is uploaded
-// to the update folder served to clients.
+// Package packager creates signed update manifests and copies release artifacts
+// into an output directory for distribution.
 package packager

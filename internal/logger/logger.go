@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// Package-level logger state and default runtime log level.
 var (
 	// global is the shared logger instance used throughout the application.
 	//nolint:gochecknoglobals // Logger is used all over the project, so it's okay.
@@ -18,6 +19,7 @@ var (
 	defaultLevel = zap.NewAtomicLevelAt(zap.InfoLevel)
 )
 
+// init initializes global logger with default level for package helpers.
 func init() { //nolint:gochecknoinits // If the logging level is not set, the application will have no logs.
 	SetLogger(New(defaultLevel))
 }

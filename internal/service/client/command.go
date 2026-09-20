@@ -2,12 +2,17 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/oshokin/alarm-button/internal/config"
 	"github.com/oshokin/alarm-button/internal/logger"
 	pb "github.com/oshokin/alarm-button/internal/pb/v1"
+	"github.com/oshokin/alarm-button/internal/retry"
 	"github.com/oshokin/alarm-button/internal/service/common"
 	"github.com/oshokin/alarm-button/internal/service/power"
 )
@@ -27,11 +32,25 @@ type Options struct {
 	Debug bool
 }
 
-// DefaultPushInterval defines retry delay when pushing alarm state to server.
-const defaultPushInterval = 1 * time.Second
+const (
+	// UnknownValue is used as a fallback when data is not available.
+	UnknownValue = "<unknown>"
+	// defaultRetryInitialDelay is the first retry wait duration.
+	defaultRetryInitialDelay = 250 * time.Millisecond
+	// defaultRetryMaxDelay is the upper bound for retry waits.
+	defaultRetryMaxDelay = 5 * time.Second
+	// defaultRetryJitterDivisor adds up to 20% jitter to retry waits.
+	defaultRetryJitterDivisor uint64 = 5
+)
 
-// UnknownValue is used as a fallback when data is not available.
-const UnknownValue = "<unknown>"
+var (
+	// errRetryableSetAlarmStateRPC marks transient gRPC failures as retryable.
+	errRetryableSetAlarmStateRPC = errors.New("transient SetAlarmState RPC error")
+	// errRetryableAlarmStateMismatch marks server/client state mismatch as retryable.
+	errRetryableAlarmStateMismatch = errors.New("alarm state mismatch")
+	// defaultSetAlarmStateRetryEngine is a reusable retry engine for alarm state changes.
+	defaultSetAlarmStateRetryEngine = mustNewDefaultRetryEngine()
+)
 
 // Run attempts to set alarm state with retry logic until success or cancellation.
 func Run(ctx context.Context, opts *Options) error {
@@ -48,6 +67,11 @@ func Run(ctx context.Context, opts *Options) error {
 		_ = client.Close()
 	}()
 
+	actor, err := common.DetectActor()
+	if err != nil {
+		return fmt.Errorf("detect actor: %w", err)
+	}
+
 	// Log the operation start.
 	logger.InfoKV(
 		ctx,
@@ -59,7 +83,7 @@ func Run(ctx context.Context, opts *Options) error {
 	)
 
 	// Execute the alarm state change with retry logic.
-	return executeWithRetry(ctx, client, opts)
+	return executeWithRetry(ctx, client, actor, opts, defaultSetAlarmStateRetryEngine)
 }
 
 // setupClient handles client configuration and connection setup.
@@ -76,8 +100,17 @@ func setupClient(ctx context.Context, opts *Options) (*common.Client, string, er
 		serverAddress = opts.ServerAddress
 	}
 
-	// Connect to alarm server with timeout from config.
-	client, err := common.Dial(ctx, serverAddress, common.WithCallTimeout(cfg.Timeout))
+	if !cfg.TLS.Enabled && cfg.AllowInsecureRemote && !common.IsLoopbackAddress(serverAddress) {
+		logger.WarnKV(
+			ctx,
+			"Insecure remote gRPC is explicitly enabled",
+			"server_address",
+			serverAddress,
+		)
+	}
+
+	// Connect to alarm server with timeout from configuration.
+	client, err := common.NewClient(serverAddress, cfg, common.WithCallTimeout(cfg.Timeout))
 	if err != nil {
 		return nil, "", err
 	}
@@ -86,52 +119,76 @@ func setupClient(ctx context.Context, opts *Options) (*common.Client, string, er
 }
 
 // executeWithRetry handles the retry logic for alarm state changes.
-func executeWithRetry(ctx context.Context, client *common.Client, opts *Options) error {
-	// Attempt immediately before starting retry loop.
-	if done, err := attemptAlarmStateChange(ctx, client, opts); err != nil {
-		return err
-	} else if done {
-		return nil
-	}
+func executeWithRetry(
+	ctx context.Context,
+	client *common.Client,
+	actor *pb.SystemActor,
+	opts *Options,
+	retryEngine *retry.Engine,
+) error {
+	return retryEngine.Run(
+		ctx,
+		&retry.Request{
+			Operation: func(operationCtx context.Context) error {
+				return attemptAlarmStateChange(operationCtx, client, actor, opts)
+			},
+			OnRetry: logRetryAttempt,
+		},
+	)
+}
 
-	// Setup retry timer for subsequent attempts.
-	ticker := time.NewTicker(defaultPushInterval)
-	defer ticker.Stop()
-
-	// Retry loop until success or cancellation.
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			done, err := attemptAlarmStateChange(ctx, client, opts)
-			if err != nil {
-				return err
-			}
-
-			if done {
-				return nil
-			}
-		}
+// defaultRetryConfig builds retry engine config for SetAlarmState operations.
+func defaultRetryConfig() *retry.EngineConfig {
+	return &retry.EngineConfig{
+		MaxRetries: 0,
+		DelayPolicy: retry.NewExponentialBoundedJitterPolicy(
+			defaultRetryInitialDelay,
+			defaultRetryMaxDelay,
+			defaultRetryJitterDivisor,
+		),
+		IsRetryable: isRetryableAlarmStateError,
 	}
 }
 
-// attemptAlarmStateChange tries once to change alarm state, returns (completed, error).
-func attemptAlarmStateChange(ctx context.Context, client *common.Client, opts *Options) (bool, error) {
-	// Identify current user and hostname for audit logging.
-	actor, err := common.DetectActor()
+// mustNewDefaultRetryEngine builds the static retry engine and panics on invalid static config.
+func mustNewDefaultRetryEngine() *retry.Engine {
+	retryEngine, err := retry.NewEngine(defaultRetryConfig())
 	if err != nil {
-		return false, err
+		panic(fmt.Sprintf("build default alarm-state retry engine: %v", err))
 	}
 
-	// Request state change from server.
-	var resp *pb.AlarmStateResponse
+	return retryEngine
+}
 
-	resp, err = client.SetAlarmState(ctx, actor, opts.DesiredState)
+// logRetryAttempt logs retry scheduling details.
+func logRetryAttempt(ctx context.Context, info *retry.AttemptInfo) {
+	logger.WarnKV(
+		ctx,
+		"SetAlarmState attempt did not converge; retrying",
+		"retry",
+		info.Retry,
+		"delay",
+		info.Delay,
+		"error",
+		info.Err,
+	)
+}
+
+// attemptAlarmStateChange tries once to change alarm state.
+func attemptAlarmStateChange(
+	ctx context.Context,
+	client *common.Client,
+	actor *pb.SystemActor,
+	opts *Options,
+) error {
+	// Request state change from server.
+	resp, err := client.SetAlarmState(ctx, actor, opts.DesiredState)
 	if err != nil {
-		// Log error but continue retrying for transient failures.
-		logger.ErrorKV(ctx, "SetAlarmState failed", "error", err)
-		return false, nil
+		if isRetryableRPCError(err) {
+			return fmt.Errorf("%w: %w", errRetryableSetAlarmStateRPC, err)
+		}
+
+		return fmt.Errorf("set alarm state: %w", err)
 	}
 
 	// Check if server confirmed the desired state change.
@@ -139,15 +196,16 @@ func attemptAlarmStateChange(ctx context.Context, client *common.Client, opts *O
 		logger.Infof(ctx, "Alarm updated: %s", formatState(resp))
 
 		// Handle shutdown if alarm is being enabled and not in debug mode.
-		if err = handleShutdownIfNeeded(ctx, opts); err != nil {
-			return false, err
-		}
-
-		return true, nil
+		return handleShutdownIfNeeded(ctx, opts)
 	}
 
 	// Server responded but state mismatch, continue retrying.
-	return false, nil
+	return errRetryableAlarmStateMismatch
+}
+
+// isRetryableAlarmStateError reports retry eligibility for SetAlarmState operation errors.
+func isRetryableAlarmStateError(err error) bool {
+	return errors.Is(err, errRetryableSetAlarmStateRPC) || errors.Is(err, errRetryableAlarmStateMismatch)
 }
 
 // handleShutdownIfNeeded triggers shutdown if alarm is being enabled and not in debug mode.
@@ -188,4 +246,14 @@ func formatState(state *pb.AlarmStateResponse) string {
 	}
 
 	return fmt.Sprintf("%s by %s (%s)", status, actor, timestamp)
+}
+
+// isRetryableRPCError reports whether gRPC error should trigger retry loop.
+func isRetryableRPCError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.ResourceExhausted, codes.DeadlineExceeded:
+		return true
+	default:
+		return false
+	}
 }

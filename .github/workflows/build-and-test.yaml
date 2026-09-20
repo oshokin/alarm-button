@@ -15,12 +15,23 @@ on:
   # Enable manually triggering this workflow via the API or web UI.
   workflow_dispatch:
 
+# Minimal permissions for CI jobs.
+permissions:
+  contents: read
+
+# Cancel outdated CI runs for the same branch/PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # Environment variables (constants for configuration).
 env:
   # Tool versions.
-  GOLANGCI_LINT_VERSION: "v2.5.0"
-  GO_VERSION: "1.25.x"
-  
+  GOLANGCI_LINT_VERSION: "v2.13.2"
+  GORELEASER_VERSION: "v2.18.2"
+  GOVULNCHECK_VERSION: "v1.8.0"
+  TASK_VERSION: "v3.42.1"
+
   # Test configuration.
   TEST_TIMEOUT: "600s"
 
@@ -42,32 +53,128 @@ jobs:
         with:
           # Fetch all commits and branches for complete history.
           fetch-depth: 0
+      # Install Go toolchain for module checks and vet.
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify lint version sync with Taskfile
+        run: |
+          set -euo pipefail
+          taskfile_version="$(sed -nE 's/^[[:space:]]*GOLANGCI_VERSION:[[:space:]]*"([^"]+)".*/\1/p' taskfile.yaml)"
+          if [[ -z "${taskfile_version}" ]]; then
+            echo "GOLANGCI_VERSION not found in taskfile.yaml" >&2
+            exit 1
+          fi
+
+          workflow_version="${GOLANGCI_LINT_VERSION#v}"
+          if [[ "${workflow_version}" != "${taskfile_version}" ]]; then
+            echo "golangci-lint version mismatch: workflow=${workflow_version}, taskfile=${taskfile_version}" >&2
+            exit 1
+          fi
       # Run golangci-lint to check code quality, style, and potential bugs.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
-  # Job to test the application on multiple Go versions and platforms.
+  # Job to verify module integrity and static checks.
+  module-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify modules
+        run: go mod verify
+      - name: Check tidy diff
+        run: go mod tidy -diff
+      - name: Run go vet
+        run: go vet ./...
+
+  # Job to verify generated sources are committed.
+  generated-code:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Task
+        run: go install github.com/go-task/task/v3/cmd/task@${{ env.TASK_VERSION }}
+      - name: Regenerate protobuf and verify clean diff
+        run: |
+          set -euo pipefail
+          "$(go env GOPATH)/bin/task" generate-protobuf
+          git diff --exit-code -- api/v1 internal/pb
+
+  # Job to run vulnerability scanning.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+      - name: Run govulncheck
+        run: |
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+  # Job to validate release configuration.
+  release-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: GoReleaser check
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: check
+      - name: GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --snapshot --clean
+
+  # Job to test the application on multiple platforms.
   test-go-versions:
     runs-on: ${{ matrix.platform }}
     strategy:
       # Continue running other matrix jobs even if one fails.
       fail-fast: false
-      # Create a matrix of 2 jobs: 1 Go version × 2 platforms.
+      # Create a matrix of 3 jobs: 3 platforms.
       matrix:
-        go-version: ["1.25.x"]
-        platform: [ubuntu-latest, windows-latest]
+        platform: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       # Checkout the repository code.
       - name: Checkout code
         uses: actions/checkout@v6
-      # Install the Go version specified in the matrix.
-      - name: Install Go ${{ matrix.go-version }}
+      # Install Go version from go.mod.
+      - name: Install Go
         uses: actions/setup-go@v6
         with:
-          # Use the Go version from the matrix.
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
           cache: true
       # Run all tests with race detection.
       - name: Run tests
@@ -85,9 +192,9 @@ jobs:
     strategy:
       # Continue running other matrix jobs even if one fails.
       fail-fast: false
-      # Create a matrix of 2 jobs: 2 platforms.
+      # Create a matrix of 3 jobs: 3 platforms.
       matrix:
-        platform: [ubuntu-latest, windows-latest]
+        platform: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       # Checkout the repository code.
       - name: Checkout code
@@ -96,8 +203,8 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v6
         with:
-          # Use the configured Go version.
-          go-version: ${{ env.GO_VERSION }}
+          # Use Go version from go.mod.
+          go-version-file: go.mod
           cache: true
       # Build the application and verify it works.
       - name: Check build

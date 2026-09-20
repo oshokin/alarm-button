@@ -7,15 +7,27 @@ import (
 )
 
 // AttachCobraVersionCommand attaches a `version` subcommand to the provided root command.
-// It prints detailed build info.
+// It supports human-readable and short machine-readable output.
 func AttachCobraVersionCommand(root *cobra.Command) {
+	var short bool
+
 	// Subcommand: `version`.
-	root.AddCommand(&cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print version information.",
-		Long:  "Print detailed version information including build metadata, commit hash, and build timestamp. This information is automatically injected during the build process from Git tags and repository state.",
-		Run: func(cmd *cobra.Command, _ []string) {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), Full())
+		Long:  "Print detailed version information including semantic version and commit hash.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if short {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), Short())
+				return err
+			}
+
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), Full())
+
+			return err
 		},
-	})
+	}
+
+	cmd.Flags().BoolVar(&short, "short", false, "print semantic version only")
+	root.AddCommand(cmd)
 }

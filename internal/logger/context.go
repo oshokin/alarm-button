@@ -50,6 +50,7 @@ func WithFields(ctx context.Context, fields ...zap.Field) context.Context {
 	return ToContext(ctx, log)
 }
 
+// getLogger returns logger from context or global fallback.
 func getLogger(ctx context.Context) *zap.SugaredLogger {
 	l := global
 	if logger, ok := ctx.Value(loggerContextKey).(*zap.SugaredLogger); ok {

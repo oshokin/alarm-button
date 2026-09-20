@@ -48,3 +48,21 @@ func TestFileRepository_SaveLoad_Roundtrip(t *testing.T) {
 	_, err = os.Stat(file)
 	require.NoError(t, err)
 }
+
+// TestFileRepository_ContextCanceled verifies Save/Load honor canceled context.
+func TestFileRepository_ContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "state.json")
+	repo := NewFileRepository(file)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := repo.Save(ctx, &domain.State{IsEnabled: true})
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, err = repo.Load(ctx)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+}

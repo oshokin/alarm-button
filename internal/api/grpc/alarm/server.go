@@ -19,6 +19,7 @@ type Service interface {
 
 // Server implements the AlarmService gRPC API.
 type Server struct {
+	// UnimplementedAlarmServiceServer preserves forward-compatible gRPC interface behavior.
 	pb.UnimplementedAlarmServiceServer
 
 	// service provides the business logic for alarm operations.
@@ -42,25 +43,25 @@ func (s *Server) SetAlarmState(ctx context.Context, req *pb.SetAlarmStateRequest
 		return nil, status.Error(codes.InvalidArgument, "actor is required")
 	}
 
-	actor := toDomainActor(req.GetActor())
+	actor := s.toDomainActor(req.GetActor())
 
 	state, err := s.service.SetAlarmState(ctx, actor, req.GetIsEnabled())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "unable to persist state")
 	}
 
-	return toProtoState(state), nil
+	return s.toProtoState(state), nil
 }
 
 // GetAlarmState returns the current alarm status.
 func (s *Server) GetAlarmState(ctx context.Context, _ *pb.GetAlarmStateRequest) (*pb.AlarmStateResponse, error) {
 	state := s.service.GetAlarmState(ctx)
 
-	return toProtoState(state), nil
+	return s.toProtoState(state), nil
 }
 
 // toDomainActor converts a protobuf SystemActor to a domain Actor.
-func toDomainActor(actor *pb.SystemActor) *domain.Actor {
+func (s *Server) toDomainActor(actor *pb.SystemActor) *domain.Actor {
 	if actor == nil {
 		return nil
 	}
@@ -72,7 +73,7 @@ func toDomainActor(actor *pb.SystemActor) *domain.Actor {
 }
 
 // toProtoState converts a domain.State object to a pb.AlarmStateResponse protobuf message.
-func toProtoState(state *domain.State) *pb.AlarmStateResponse {
+func (s *Server) toProtoState(state *domain.State) *pb.AlarmStateResponse {
 	if state == nil {
 		return &pb.AlarmStateResponse{}
 	}

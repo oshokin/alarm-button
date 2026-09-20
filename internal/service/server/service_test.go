@@ -12,7 +12,11 @@ import (
 	repo "github.com/oshokin/alarm-button/internal/repository/state"
 )
 
-var errTestLoad = errors.New("test load error")
+// Test sentinel errors for repository load/save behavior.
+var (
+	errTestLoad = errors.New("test load error")
+	errTestSave = errors.New("test save error")
+)
 
 // memoryRepository is a minimal in-memory Repository implementation for tests.
 type memoryRepository struct {
@@ -22,6 +26,8 @@ type memoryRepository struct {
 	loadErr error
 	// saved stores the last state passed to Save operations.
 	saved *domain.State
+	// saveErr is returned by Save when configured.
+	saveErr error
 }
 
 // Load retrieves the current state from the memory repository.
@@ -33,6 +39,10 @@ func (m *memoryRepository) Load(context.Context) (*domain.State, error) {
 // Save stores the provided domain.State in memory. It overwrites any previously saved state.
 // This method always returns nil and does not perform any validation.
 func (m *memoryRepository) Save(_ context.Context, s *domain.State) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+
 	m.saved = s
 
 	return nil
@@ -96,4 +106,27 @@ func TestService_SetAndGet(t *testing.T) {
 
 	currentState := s.GetAlarmState(context.Background())
 	require.True(t, currentState.IsEnabled)
+}
+
+// TestService_SetAlarmState_DoesNotCommitMemoryWhenSaveFails verifies save failure rollback in memory.
+func TestService_SetAlarmState_DoesNotCommitMemoryWhenSaveFails(t *testing.T) {
+	t.Parallel()
+
+	repo := &memoryRepository{saveErr: errTestSave, loadErr: repo.ErrNotFound}
+	s, err := newService(context.Background(), repo)
+	require.NoError(t, err)
+
+	before := s.GetAlarmState(context.Background())
+	require.False(t, before.IsEnabled)
+
+	_, err = s.SetAlarmState(
+		context.Background(),
+		&domain.Actor{Hostname: "host", Username: "user"},
+		true,
+	)
+	require.ErrorIs(t, err, errTestSave)
+
+	after := s.GetAlarmState(context.Background())
+	require.Equal(t, before.IsEnabled, after.IsEnabled)
+	require.Equal(t, before.LastActor, after.LastActor)
 }

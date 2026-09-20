@@ -13,9 +13,14 @@ import (
 	"github.com/oshokin/alarm-button/internal/version"
 )
 
+// CLI globals hold flags and root command wiring.
 var (
 	// configPath to the configuration YAML file.
 	configPath string
+	// allowDowngrade allows explicit binary version downgrade.
+	allowDowngrade bool
+	// allowConfigRollback allows explicit configuration revision rollback.
+	allowConfigRollback bool
 
 	// rootCmd represents the base command for downloading and applying updates.
 	rootCmd = &cobra.Command{
@@ -29,8 +34,10 @@ var (
 			defer stop()
 
 			options := &updater.Options{
-				ConfigPath: configPath,
-				UpdateType: args[0],
+				ConfigPath:          configPath,
+				UpdateType:          args[0],
+				AllowDowngrade:      allowDowngrade,
+				AllowConfigRollback: allowConfigRollback,
 			}
 
 			return updater.Run(ctx, options)
@@ -51,4 +58,7 @@ func Execute() {
 func init() {
 	// Setup command flags with consistent naming and descriptions.
 	rootCmd.Flags().StringVarP(&configPath, "config", "c", config.DefaultConfigFilename, "path to configuration file")
+	rootCmd.Flags().BoolVar(&allowDowngrade, "allow-downgrade", false, "allow authenticated older binary version")
+	rootCmd.Flags().
+		BoolVar(&allowConfigRollback, "allow-config-rollback", false, "allow authenticated older configuration revision")
 }
