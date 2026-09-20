@@ -40,14 +40,14 @@ jobs:
       # Check out repository with full Git history for version analysis.
       # For workflow_run events, pin checkout to the exact commit that passed CI.
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       # Set up Go environment for building release binaries.
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
